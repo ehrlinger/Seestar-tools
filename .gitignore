@@ -1,0 +1,20 @@
+# Personal config — copy seestar.conf.example → seestar.conf and fill in your paths
+seestar.conf
+
+# macOS
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Siril intermediate files (not source data)
+*.seq
+pp_*.fit
+r_pp_*.fit
