@@ -56,18 +56,24 @@ SCRIPT_SEARCH_PATHS = [
 # NAS keepalive + mount check
 # ---------------------------------------------------------------------------
 
-def start_nas_keepalive(root: Path, interval: int = 20) -> threading.Event:
+def start_nas_keepalive(root: Path, interval: int = 10) -> threading.Event:
     """
-    Start a background thread that stat()s `root` every `interval` seconds.
-    This prevents NAS drives from spinning down during long stacks.
+    Start a background thread that reads a few bytes from the NAS every
+    `interval` seconds to prevent HDD spindown during long stacks.
+    A real read (not just stat) is more reliable at resetting NAS idle timers.
     Returns a stop_event; call stop_event.set() when done.
     """
     stop_event = threading.Event()
 
+    # Find or create a small sentinel file to read from
+    sentinel = root / ".seestar_keepalive"
+
     def _ping() -> None:
         while not stop_event.wait(interval):
             try:
-                root.stat()
+                # Write then read — guarantees the NAS sees actual I/O
+                sentinel.write_bytes(b"1")
+                sentinel.read_bytes()
             except OSError:
                 pass  # NAS offline; the main thread will catch the real failure
 
@@ -120,10 +126,19 @@ def has_lights(sub_dir: Path) -> bool:
     )
 
 
+PROCESSED_PREFIXES = ("starless_", "starmask_", "r_pp_", "pp_", "stack_")
+
 def has_stack(sub_dir: Path) -> Path | None:
-    """Return the stacked result file if one exists, else None."""
+    """
+    Return the primary stacked result file if one exists, else None.
+    Skips post-processed derivatives (starless_, starmask_, r_pp_, pp_, stack_)
+    so that a previously-processed file doesn't masquerade as the raw stack.
+    """
     for f in sub_dir.iterdir():
-        if f.is_file() and f.suffix in FITS_EXTENSIONS and STACKED_RE.search(f.name):
+        if (f.is_file()
+                and f.suffix in FITS_EXTENSIONS
+                and STACKED_RE.search(f.name)
+                and not any(f.name.startswith(p) for p in PROCESSED_PREFIXES)):
             return f
     return None
 
