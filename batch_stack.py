@@ -133,14 +133,29 @@ def has_stack(sub_dir: Path) -> Path | None:
     Return the primary stacked result file if one exists, else None.
     Skips post-processed derivatives (starless_, starmask_, r_pp_, pp_, stack_)
     so that a previously-processed file doesn't masquerade as the raw stack.
+
+    When multiple stacks are present (successive re-stacks on different nights),
+    returns the one with the highest sub count so staleness detection always
+    compares against the best available result rather than an older one picked
+    at random by iterdir().  Falls back to newest mtime when the count is
+    unparseable.
     """
-    for f in sub_dir.iterdir():
+    candidates = [
+        f for f in sub_dir.iterdir()
         if (f.is_file()
-                and f.suffix in FITS_EXTENSIONS
-                and STACKED_RE.search(f.name)
-                and not any(f.name.startswith(p) for p in PROCESSED_PREFIXES)):
-            return f
-    return None
+            and f.suffix in FITS_EXTENSIONS
+            and STACKED_RE.search(f.name)
+            and not any(f.name.startswith(p) for p in PROCESSED_PREFIXES))
+    ]
+    if not candidates:
+        return None
+
+    def _sort_key(f: Path) -> tuple[int, float]:
+        m = re.search(r"(\d+)x\d+sec", f.name, re.IGNORECASE)
+        count = int(m.group(1)) if m else 0
+        return (count, f.stat().st_mtime)
+
+    return max(candidates, key=_sort_key)
 
 
 def count_lights(sub_dir: Path) -> int:
