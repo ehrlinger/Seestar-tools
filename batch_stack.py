@@ -329,10 +329,23 @@ def main():
             script_arg = argv[i + 1]
             break
 
-    # First non-flag arg that looks like a path is root; second is a target filter
+    # Argument parsing:
+    #   If the first positional arg resolves to an existing path → it's the root.
+    #   If it doesn't exist as a path → treat it as a target filter with root=".".
+    #   A second positional arg (when the first is a path) is always the filter.
     path_args = [a for a in args if a != script_arg]
-    root_arg  = path_args[0] if path_args else "."
-    filter_name = path_args[1] if len(path_args) > 1 else ""
+
+    if not path_args:
+        root_arg, filter_name = ".", ""
+    elif Path(path_args[0]).expanduser().exists():
+        root_arg    = path_args[0]
+        filter_name = path_args[1] if len(path_args) > 1 else ""
+    else:
+        # First arg is not an existing path — treat as a target filter
+        root_arg    = "."
+        filter_name = path_args[0]
+        if len(path_args) > 1:
+            print(f"Warning: extra argument '{path_args[1]}' ignored")
 
     root = Path(root_arg).expanduser().resolve()
     if not root.exists():
