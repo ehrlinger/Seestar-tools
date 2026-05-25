@@ -126,7 +126,7 @@ def has_lights(sub_dir: Path) -> bool:
     )
 
 
-PROCESSED_PREFIXES = ("starless_", "starmask_", "r_pp_", "pp_", "stack_")
+PROCESSED_PREFIXES = ("._", "starless_", "starmask_", "r_pp_", "pp_", "stack_")
 
 def has_stack(sub_dir: Path) -> Path | None:
     """
@@ -178,9 +178,46 @@ def needs_stacking(sub_dir: Path) -> tuple[bool, str]:
         return False, f"stacked but count unparseable — skipping ({stack.name})"
 
     if current > prev:
+        # Siril may legitimately exclude some frames (wrong exposure, quality
+        # rejects, filter mismatches).  Only treat the folder as stale if at
+        # least one light file is *newer* than the stack — i.e. new subs have
+        # actually arrived since the last stack run.
+        stack_mtime = stack.stat().st_mtime
+        lights_dir  = sub_dir / "lights"
+        if lights_dir.exists():
+            newest_light = max(
+                (f.stat().st_mtime for f in lights_dir.iterdir()
+                 if f.is_file() and f.suffix in FITS_EXTENSIONS),
+                default=0.0,
+            )
+            if newest_light <= stack_mtime:
+                excluded = current - prev
+                return False, f"up to date ({prev} stacked; {excluded} frame(s) excluded by Siril)"
         return True, f"stale — {prev} stacked, {current} lights now"
 
     return False, f"up to date ({prev} subs)"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup helpers
+# ---------------------------------------------------------------------------
+
+def cleanup_intermediates(sub_dir: Path) -> int:
+    """
+    Remove Siril intermediate files left by a failed or partial run:
+      *.seq, pp_light_*.fit, r_pp_light_*.fit
+    Returns the number of files deleted.
+    """
+    patterns = ("*.seq", "pp_light_*.fit", "r_pp_light_*.fit")
+    deleted = 0
+    for pattern in patterns:
+        for f in sub_dir.glob(pattern):
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +277,13 @@ def stack_folder(sub_dir: Path, script_path: Path, dry_run: bool) -> bool | None
             # If it died fast, confirm NAS state and signal caller to stop
             if elapsed < 5.0 and not check_mount(sub_dir.parent):
                 print(f"\n  🛑  NAS is no longer accessible. Stopping batch.")
+                cleanup_intermediates(sub_dir)
                 return None
+
+            # Clean up partial intermediate files so the next run starts fresh
+            n = cleanup_intermediates(sub_dir)
+            if n:
+                print(f"  🧹  Cleaned {n} intermediate file(s) for next run")
 
             return False
     except subprocess.TimeoutExpired:
