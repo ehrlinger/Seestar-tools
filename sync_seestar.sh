@@ -13,14 +13,47 @@
 #   ./sync_seestar.sh --no-cleanup # sync only, skip steps 2-4
 #   ./sync_seestar.sh -h           # this help
 #
-# Paths — edit if your mount points differ:
-SRC="/Volumes/EMMC Images/MyWorks/"
-DST="/Volumes/personal_folder/Seestar/"
+# Paths are loaded from seestar.conf (see seestar.conf.example).
+# These are only used as a last-resort fallback if the conf is missing.
+SRC=""
+DST=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLEANUP="$SCRIPT_DIR/cleanup_seestar.py"
 RENAME="$SCRIPT_DIR/rename_seestar_folders.py"
 COUNT="$SCRIPT_DIR/count_subs.py"
+CONF="$SCRIPT_DIR/seestar.conf"
+
+# Load seestar.conf if present, then map its keys to SRC/DST
+if [[ -f "$CONF" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONF"
+  SRC="${SEESTAR_EMMC:-$SRC}"
+  DST="${SEESTAR_NAS:-$DST}"
+fi
+
+# Platform-aware fallbacks if conf didn't set them
+if [[ -z "$SRC" || -z "$DST" ]]; then
+  case "$(uname -s)" in
+    Darwin)
+      SRC="${SRC:-/Volumes/EMMC Images/MyWorks/}"
+      DST="${DST:-/Volumes/YourNAS/Seestar/}"
+      ;;
+    Linux)
+      SRC="${SRC:-/media/$USER/EMMC Images/MyWorks/}"
+      DST="${DST:-/mnt/nas/Seestar/}"
+      ;;
+    *)
+      # Windows (git-bash / WSL) and others: no sensible default
+      ;;
+  esac
+fi
+
+if [[ -z "$SRC" || -z "$DST" ]]; then
+  echo "❌  SRC or DST not configured."
+  echo "    Copy seestar.conf.example to seestar.conf and set SEESTAR_EMMC + SEESTAR_NAS."
+  exit 1
+fi
 
 # ─────────────────────────────────────────────────────────
 # Help

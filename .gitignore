@@ -14,6 +14,9 @@ __pycache__/
 *.pyd
 .Python
 
+# NAS keepalive sentinel (created at runtime by batch_stack.py)
+.seestar_keepalive
+
 # Siril intermediate files (not source data)
 *.seq
 pp_*.fit

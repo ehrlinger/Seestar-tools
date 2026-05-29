@@ -56,18 +56,24 @@ SCRIPT_SEARCH_PATHS = [
 # NAS keepalive + mount check
 # ---------------------------------------------------------------------------
 
-def start_nas_keepalive(root: Path, interval: int = 20) -> threading.Event:
+def start_nas_keepalive(root: Path, interval: int = 10) -> threading.Event:
     """
-    Start a background thread that stat()s `root` every `interval` seconds.
-    This prevents NAS drives from spinning down during long stacks.
+    Start a background thread that reads a few bytes from the NAS every
+    `interval` seconds to prevent HDD spindown during long stacks.
+    A real read (not just stat) is more reliable at resetting NAS idle timers.
     Returns a stop_event; call stop_event.set() when done.
     """
     stop_event = threading.Event()
 
+    # Find or create a small sentinel file to read from
+    sentinel = root / ".seestar_keepalive"
+
     def _ping() -> None:
         while not stop_event.wait(interval):
             try:
-                root.stat()
+                # Write then read — guarantees the NAS sees actual I/O
+                sentinel.write_bytes(b"1")
+                sentinel.read_bytes()
             except OSError:
                 pass  # NAS offline; the main thread will catch the real failure
 
@@ -120,12 +126,36 @@ def has_lights(sub_dir: Path) -> bool:
     )
 
 
+PROCESSED_PREFIXES = ("._", "starless_", "starmask_", "r_pp_", "pp_", "stack_")
+
 def has_stack(sub_dir: Path) -> Path | None:
-    """Return the stacked result file if one exists, else None."""
-    for f in sub_dir.iterdir():
-        if f.is_file() and f.suffix in FITS_EXTENSIONS and STACKED_RE.search(f.name):
-            return f
-    return None
+    """
+    Return the primary stacked result file if one exists, else None.
+    Skips post-processed derivatives (starless_, starmask_, r_pp_, pp_, stack_)
+    so that a previously-processed file doesn't masquerade as the raw stack.
+
+    When multiple stacks are present (successive re-stacks on different nights),
+    returns the one with the highest sub count so staleness detection always
+    compares against the best available result rather than an older one picked
+    at random by iterdir().  Falls back to newest mtime when the count is
+    unparseable.
+    """
+    candidates = [
+        f for f in sub_dir.iterdir()
+        if (f.is_file()
+            and f.suffix in FITS_EXTENSIONS
+            and STACKED_RE.search(f.name)
+            and not any(f.name.startswith(p) for p in PROCESSED_PREFIXES))
+    ]
+    if not candidates:
+        return None
+
+    def _sort_key(f: Path) -> tuple[int, float]:
+        m = re.search(r"(\d+)x\d+sec", f.name, re.IGNORECASE)
+        count = int(m.group(1)) if m else 0
+        return (count, f.stat().st_mtime)
+
+    return max(candidates, key=_sort_key)
 
 
 def count_lights(sub_dir: Path) -> int:
@@ -163,9 +193,46 @@ def needs_stacking(sub_dir: Path) -> tuple[bool, str]:
         return False, f"stacked but count unparseable — skipping ({stack.name})"
 
     if current > prev:
+        # Siril may legitimately exclude some frames (wrong exposure, quality
+        # rejects, filter mismatches).  Only treat the folder as stale if at
+        # least one light file is *newer* than the stack — i.e. new subs have
+        # actually arrived since the last stack run.
+        stack_mtime = stack.stat().st_mtime
+        lights_dir  = sub_dir / "lights"
+        if lights_dir.exists():
+            newest_light = max(
+                (f.stat().st_mtime for f in lights_dir.iterdir()
+                 if f.is_file() and f.suffix in FITS_EXTENSIONS),
+                default=0.0,
+            )
+            if newest_light <= stack_mtime:
+                excluded = current - prev
+                return False, f"up to date ({prev} stacked; {excluded} frame(s) excluded by Siril)"
         return True, f"stale — {prev} stacked, {current} lights now"
 
     return False, f"up to date ({prev} subs)"
+
+
+# ---------------------------------------------------------------------------
+# Cleanup helpers
+# ---------------------------------------------------------------------------
+
+def cleanup_intermediates(sub_dir: Path) -> int:
+    """
+    Remove Siril intermediate files left by a failed or partial run:
+      *.seq, pp_light_*.fit, r_pp_light_*.fit
+    Returns the number of files deleted.
+    """
+    patterns = ("*.seq", "pp_light_*.fit", "r_pp_light_*.fit")
+    deleted = 0
+    for pattern in patterns:
+        for f in sub_dir.glob(pattern):
+            try:
+                f.unlink()
+                deleted += 1
+            except OSError:
+                pass
+    return deleted
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +292,13 @@ def stack_folder(sub_dir: Path, script_path: Path, dry_run: bool) -> bool | None
             # If it died fast, confirm NAS state and signal caller to stop
             if elapsed < 5.0 and not check_mount(sub_dir.parent):
                 print(f"\n  🛑  NAS is no longer accessible. Stopping batch.")
+                cleanup_intermediates(sub_dir)
                 return None
+
+            # Clean up partial intermediate files so the next run starts fresh
+            n = cleanup_intermediates(sub_dir)
+            if n:
+                print(f"  🧹  Cleaned {n} intermediate file(s) for next run")
 
             return False
     except subprocess.TimeoutExpired:
@@ -256,10 +329,23 @@ def main():
             script_arg = argv[i + 1]
             break
 
-    # First non-flag arg that looks like a path is root; second is a target filter
+    # Argument parsing:
+    #   If the first positional arg resolves to an existing path → it's the root.
+    #   If it doesn't exist as a path → treat it as a target filter with root=".".
+    #   A second positional arg (when the first is a path) is always the filter.
     path_args = [a for a in args if a != script_arg]
-    root_arg  = path_args[0] if path_args else "."
-    filter_name = path_args[1] if len(path_args) > 1 else ""
+
+    if not path_args:
+        root_arg, filter_name = ".", ""
+    elif Path(path_args[0]).expanduser().exists():
+        root_arg    = path_args[0]
+        filter_name = path_args[1] if len(path_args) > 1 else ""
+    else:
+        # First arg is not an existing path — treat as a target filter
+        root_arg    = "."
+        filter_name = path_args[0]
+        if len(path_args) > 1:
+            print(f"Warning: extra argument '{path_args[1]}' ignored")
 
     root = Path(root_arg).expanduser().resolve()
     if not root.exists():

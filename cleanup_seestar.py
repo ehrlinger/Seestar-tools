@@ -50,8 +50,8 @@ JPG_EXTENSIONS  = {".jpg", ".jpeg", ".JPG", ".JPEG"}
 SIRIL_SUBDIRS   = ["lights", "darks", "flats"]
 
 # ---------------------------------------------------------------------------
-# Suffixes that indicate a secondary capture session rather than a new target.
-# Stripped when deriving the canonical target name for grouping.
+# Suffix-stripping for deriving the canonical target name used to group
+# multi-night sessions.
 #
 # Handles patterns like:
 #   "M 51_sub"
@@ -60,17 +60,24 @@ SIRIL_SUBDIRS   = ["lights", "darks", "flats"]
 #   "M 51_20260522_sub"
 #   "M 51_subs"
 #   "M 51 (2)_sub"
+#
+# NOTE: the session-suffix regex deliberately does NOT include a bare \d+
+# branch. That would match the target's own catalog number (the "51" in
+# "M 51") once the _sub suffix is stripped, collapsing every Messier/NGC
+# target into just its prefix letter. The middle _sub_N case is handled
+# separately below.
 # ---------------------------------------------------------------------------
+_SUB_INDEX_SUFFIX_RE = re.compile(r"_(?:subs|sub)_\d+$")
+_SUB_SUFFIX_RE       = re.compile(r"_(?:subs|sub)$")
 _SESSION_SUFFIX_RE = re.compile(
     r"""
-    [\s_-]*           # optional separator
+    [\s_-]+           # required separator (prevents matching at end of "M 51")
     (?:
         \d{4}-\d{2}-\d{2}   # ISO date: 2026-05-22
       | \d{8}               # compact date: 20260522
       | \(\d+\)             # parenthesised index: (2)
-      | \d+                 # bare index: 2
     )
-    $                 # anchored at end (before _sub/_subs is stripped)
+    $
     """,
     re.VERBOSE,
 )
@@ -81,19 +88,26 @@ def canonical_target_name(folder_name: str) -> str:
     Strip _sub/_subs and any session-distinguishing suffix to get the
     canonical target name used for grouping multi-night sessions.
 
+    Spaces and underscores are treated as equivalent separators so that
+    "M 51_sub" and "M_51_sub" both map to the same canonical key "M 51".
+
     Examples:
         "M 51_sub"               → "M 51"
+        "M_51_sub"               → "M 51"   (underscore normalised to space)
         "M 51 2026-05-22_sub"    → "M 51"
         "NGC 6946_subs"          → "NGC 6946"
+        "NGC_6946_sub"           → "NGC 6946"
         "M 51_sub_2"             → "M 51"
         "M 51 (2)_sub"           → "M 51"
     """
     name = folder_name
-    for suffix in ("_subs", "_sub"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-            break
-    name = _SESSION_SUFFIX_RE.sub("", name).strip()
+    name = _SUB_INDEX_SUFFIX_RE.sub("", name)  # _sub_2 / _subs_3 → ""
+    name = _SUB_SUFFIX_RE.sub("", name)        # trailing _sub / _subs → ""
+    name = _SESSION_SUFFIX_RE.sub("", name)    # trailing date or (N)  → ""
+    # Normalise separators: treat space and underscore as equivalent so that
+    # "M 51_sub" and "M_51_sub" land in the same group.
+    name = name.replace("_", " ")
+    name = " ".join(name.split())              # collapse any runs of whitespace
     return name
 
 

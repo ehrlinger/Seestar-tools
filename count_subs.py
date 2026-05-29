@@ -101,13 +101,23 @@ def collect_fits_files(sub_dir: Path) -> list[Path]:
             return False
         return True
 
+    EXPTIME_DIR_RE = re.compile(r'^\d+(\.\d+)?s$')
+
     files: list[Path] = []
 
-    # lights/ subdir
+    # lights/ subdir (unsorted)
     lights = sub_dir / "lights"
     if lights.exists():
         files += [f for f in lights.iterdir()
                   if f.is_file() and f.suffix in FITS_EXTENSIONS and is_raw(f)]
+
+    # exposure-sorted subfolders: 10s/lights/, 20s/lights/, etc.
+    for exp_dir in sub_dir.iterdir():
+        if exp_dir.is_dir() and EXPTIME_DIR_RE.match(exp_dir.name):
+            sorted_lights = exp_dir / "lights"
+            if sorted_lights.exists():
+                files += [f for f in sorted_lights.iterdir()
+                          if f.is_file() and f.suffix in FITS_EXTENSIONS and is_raw(f)]
 
     # loose files at root
     files += [f for f in sub_dir.iterdir()
