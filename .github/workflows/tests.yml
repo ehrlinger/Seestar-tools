@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unittest:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Run unittest suite
+        run: python -m unittest discover -s tests -v
+
+      - name: Sanity-import all scripts
+        # Catches import-time errors (bad path expressions, syntax) on every OS
+        run: |
+          python -c "import batch_stack, cleanup_seestar, count_subs, rename_seestar_folders; print('all modules import on', __import__('sys').platform)"
+
+  shellcheck:
+    name: bash syntax (sync_seestar.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n syntax check
+        run: bash -n sync_seestar.sh
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck sync_seestar.sh
