@@ -80,10 +80,20 @@ while [[ $# -gt 0 ]]; do
     --dry-run)         DRY_RUN=1; shift ;;
     --no-cleanup)      NO_CLEANUP=1; shift ;;
     -y|--yes)          ASSUME_YES=1; shift ;;
-    --src)             CLI_SRC="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
-    --src=*)           CLI_SRC="${1#*=}"; shift ;;
-    --dst|--dest)      CLI_DST="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
-    --dst=*|--dest=*)  CLI_DST="${1#*=}"; shift ;;
+    --src)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "❌  --src requires a non-empty path value"; exit 1; }
+      CLI_SRC="$2"; shift 2 ;;
+    --src=*)
+      CLI_SRC="${1#*=}"
+      [[ -n "$CLI_SRC" ]] || { echo "❌  --src requires a non-empty path value"; exit 1; }
+      shift ;;
+    --dst|--dest)
+      [[ $# -ge 2 && -n "$2" ]] || { echo "❌  --dst requires a non-empty path value"; exit 1; }
+      CLI_DST="$2"; shift 2 ;;
+    --dst=*|--dest=*)
+      CLI_DST="${1#*=}"
+      [[ -n "$CLI_DST" ]] || { echo "❌  --dst requires a non-empty path value"; exit 1; }
+      shift ;;
     *)
       echo "❌  Unknown argument: $1"
       echo "    Run './sync_seestar.sh -h' for usage."
@@ -93,7 +103,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─────────────────────────────────────────────────────────
-# Resolve SRC/DST: conf → CLI override → platform fallback
+# Resolve SRC/DST (precedence, highest first: CLI override > conf > platform fallback)
 # ─────────────────────────────────────────────────────────
 if [[ -f "$CONF" ]]; then
   # shellcheck disable=SC1090

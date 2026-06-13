@@ -495,10 +495,16 @@ def main():
             continue
         if a.startswith("--inventory="):
             inventory_arg = a.split("=", 1)[1]
+            if not inventory_arg:
+                print("Error: --inventory requires a non-empty path")
+                sys.exit(1)
         elif a == "--inventory":
-            if i + 1 < len(raw):
-                inventory_arg = raw[i + 1]
-                skip_next = True
+            nxt = raw[i + 1] if i + 1 < len(raw) else ""
+            if not nxt or nxt.startswith("-"):
+                print("Error: --inventory requires a non-empty path")
+                sys.exit(1)
+            inventory_arg = nxt
+            skip_next = True
         elif a.startswith("-"):
             flags.append(a)
         else:
