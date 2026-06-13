@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-clean_seestar_archive.py  —  Reclaim the Seestar archive from Siril cruft.
+purge_siril_cruft.py  —  Reclaim the Seestar archive from Siril cruft.
 
 The CORR/Seestar archive folders (e.g. M_51_sub/) accumulate three kinds of
 disposable junk that bloat file counts and space while the *real* data (raw
@@ -29,16 +29,16 @@ SAFETY
 USAGE
 -----
   # Always preview first (default is dry-run):
-  python3 clean_seestar_archive.py /Volumes/personal_folder/Astro/Seestar
+  python3 purge_siril_cruft.py /Volumes/personal_folder/Astro/Seestar
 
   # One target only:
-  python3 clean_seestar_archive.py /Volumes/personal_folder/Astro/Seestar --target M_51_sub
+  python3 purge_siril_cruft.py /Volumes/personal_folder/Astro/Seestar --target M_51_sub
 
   # Apply for real:
-  python3 clean_seestar_archive.py /Volumes/personal_folder/Astro/Seestar --apply
+  python3 purge_siril_cruft.py /Volumes/personal_folder/Astro/Seestar --apply
 
   # Skip the exposure-sort hand-off:
-  python3 clean_seestar_archive.py <root> --apply --no-sort
+  python3 purge_siril_cruft.py <root> --apply --no-sort
 
 NOTES
 -----
@@ -267,7 +267,7 @@ def main() -> None:
     dry_run = not args.apply
     mode = "DRY RUN — nothing will be deleted (use --apply to execute)" if dry_run else "APPLYING — files will be deleted"
     print("=" * 64)
-    print(f"  clean_seestar_archive  [{mode}]")
+    print(f"  purge_siril_cruft  [{mode}]")
     print(f"  root: {root}")
     print(f"  targets: {len(targets)}")
     print("=" * 64)

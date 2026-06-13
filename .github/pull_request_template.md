@@ -14,5 +14,5 @@
 ## Risk / rollback
 
 <!-- Optional. What could go wrong? How would you back this out?
-     For data-touching changes (cleanup_seestar.py --merge, batch_stack.py),
+     For data-touching changes (organize_subs.py --merge, batch_stack.py),
      note whether a --dry-run was run against real data first. -->

@@ -2,37 +2,115 @@
 # sync_seestar.sh
 #
 # Full Seestar sync pipeline (run from anywhere):
-#   Step 1 — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
-#   Step 2 — rename _sub/_subs folders (remove spaces)
-#   Step 3 — organize: move Lights_*.fits into lights/ subdirs
-#   Step 4 — count subs + update AstroImages Inventory.md (vault + local copy)
+#   Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
+#   Step 2  — rename _sub/_subs folders (remove spaces)
+#   Step 3  — organize: move Light_*.fits into lights/ subdirs
+#   Step 3b — sort subs by exposure into <exptime>s/lights/ (Siril-ready)
+#   Step 4  — count subs + update AstroImages Inventory.md (vault + local copy)
 #
 # Usage:
-#   ./sync_seestar.sh              # full pipeline
-#   ./sync_seestar.sh --dry-run    # preview only, no changes
-#   ./sync_seestar.sh --no-cleanup # sync only, skip steps 2-4
-#   ./sync_seestar.sh -h           # this help
+#   ./sync_seestar.sh                         # full pipeline (paths from seestar.conf)
+#   ./sync_seestar.sh --dst PATH              # override destination (NAS Seestar folder)
+#   ./sync_seestar.sh --src PATH              # override source (Seestar EMMC)
+#   ./sync_seestar.sh --src P1 --dst P2       # override both
+#   ./sync_seestar.sh --dry-run               # preview only, no changes
+#   ./sync_seestar.sh --no-cleanup            # sync only, skip steps 2-4
+#   ./sync_seestar.sh --yes                   # skip the destination confirmation prompt
+#   ./sync_seestar.sh -h                      # this help
 #
-# Paths are loaded from seestar.conf (see seestar.conf.example).
-# These are only used as a last-resort fallback if the conf is missing.
+# Path resolution (highest priority first):
+#   1. --src / --dst command-line arguments
+#   2. SEESTAR_EMMC / SEESTAR_NAS in seestar.conf
+#   3. platform fallback defaults (uname -s)
+#
+# A real (non-dry-run) sync prints the resolved SRC → DST and asks for
+# confirmation before touching anything, so you can't sync to the wrong folder
+# by accident. Pass --yes to skip the prompt in scripted runs.
+
+set -uo pipefail
+
 SRC=""
 DST=""
+CLI_SRC=""
+CLI_DST=""
+DRY_RUN=0
+NO_CLEANUP=0
+ASSUME_YES=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLEANUP="$SCRIPT_DIR/cleanup_seestar.py"
 RENAME="$SCRIPT_DIR/rename_seestar_folders.py"
+ORGANIZE="$SCRIPT_DIR/organize_subs.py"
+SORT="$SCRIPT_DIR/sort_by_exptime.py"
 COUNT="$SCRIPT_DIR/count_subs.py"
 CONF="$SCRIPT_DIR/seestar.conf"
 
-# Load seestar.conf if present, then map its keys to SRC/DST
+print_help() {
+  cat <<'EOF'
+sync_seestar.sh — full Seestar sync pipeline
+
+  Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
+  Step 2  — rename _sub/_subs folders (remove spaces)
+  Step 3  — organize: move Light_*.fits into lights/ subdirs
+  Step 3b — sort subs by exposure into <exptime>s/lights/ (Siril-ready)
+  Step 4  — count subs + update AstroImages Inventory.md
+
+Usage:
+  ./sync_seestar.sh                     # full pipeline (paths from seestar.conf)
+  ./sync_seestar.sh --dst PATH          # override destination (NAS Seestar folder)
+  ./sync_seestar.sh --src PATH          # override source (Seestar EMMC)
+  ./sync_seestar.sh --src P1 --dst P2   # override both
+  ./sync_seestar.sh --dry-run           # preview only, no changes
+  ./sync_seestar.sh --no-cleanup        # sync only, skip steps 2-4
+  ./sync_seestar.sh --yes               # skip the destination confirmation prompt
+  ./sync_seestar.sh -h                  # this help
+
+Path resolution (highest priority first):
+  1. --src / --dst command-line arguments
+  2. SEESTAR_EMMC / SEESTAR_NAS in seestar.conf
+  3. platform fallback defaults
+EOF
+}
+
+# ─────────────────────────────────────────────────────────
+# Parse arguments (before path resolution so --src/--dst win)
+# ─────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)         print_help; exit 0 ;;
+    --dry-run)         DRY_RUN=1; shift ;;
+    --no-cleanup)      NO_CLEANUP=1; shift ;;
+    -y|--yes)          ASSUME_YES=1; shift ;;
+    --src)             CLI_SRC="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
+    --src=*)           CLI_SRC="${1#*=}"; shift ;;
+    --dst|--dest)      CLI_DST="${2:-}"; shift; [[ $# -gt 0 ]] && shift ;;
+    --dst=*|--dest=*)  CLI_DST="${1#*=}"; shift ;;
+    *)
+      echo "❌  Unknown argument: $1"
+      echo "    Run './sync_seestar.sh -h' for usage."
+      exit 1
+      ;;
+  esac
+done
+
+# ─────────────────────────────────────────────────────────
+# Resolve SRC/DST: conf → CLI override → platform fallback
+# ─────────────────────────────────────────────────────────
 if [[ -f "$CONF" ]]; then
   # shellcheck disable=SC1090
   source "$CONF"
   SRC="${SEESTAR_EMMC:-$SRC}"
   DST="${SEESTAR_NAS:-$DST}"
+  # Make the inventory path from the conf visible to count_subs.py (Step 4)
+  if [[ -n "${SEESTAR_VAULT_INV:-}" ]]; then
+    export SEESTAR_VAULT_INV
+  fi
 fi
 
-# Platform-aware fallbacks if conf didn't set them
+# Command-line arguments take precedence over the conf
+[[ -n "$CLI_SRC" ]] && SRC="$CLI_SRC"
+[[ -n "$CLI_DST" ]] && DST="$CLI_DST"
+
+# Platform-aware fallbacks if still unset
 if [[ -z "$SRC" || -z "$DST" ]]; then
   case "$(uname -s)" in
     Darwin)
@@ -51,35 +129,19 @@ fi
 
 if [[ -z "$SRC" || -z "$DST" ]]; then
   echo "❌  SRC or DST not configured."
-  echo "    Copy seestar.conf.example to seestar.conf and set SEESTAR_EMMC + SEESTAR_NAS."
+  echo "    Pass --src/--dst, or copy seestar.conf.example → seestar.conf and set"
+  echo "    SEESTAR_EMMC + SEESTAR_NAS."
   exit 1
 fi
 
 # ─────────────────────────────────────────────────────────
-# Help
+# Dry-run banner
 # ─────────────────────────────────────────────────────────
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
-fi
-
-# ─────────────────────────────────────────────────────────
-# Parse flags
-# ─────────────────────────────────────────────────────────
-DRY_RUN=0
-NO_CLEANUP=0
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run)    DRY_RUN=1 ;;
-    --no-cleanup) NO_CLEANUP=1 ;;
-  esac
-done
-
 RSYNC_FLAGS=(-av --progress --stats)
-CLEANUP_FLAGS=""
+STEP_FLAGS=""
 if [[ $DRY_RUN -eq 1 ]]; then
-  RSYNC_FLAGS+=( --dry-run)
-  CLEANUP_FLAGS="--dry-run"
+  RSYNC_FLAGS+=(--dry-run)
+  STEP_FLAGS="--dry-run"
   echo ""
   echo "══════════════════════════════════════════════════"
   echo "  DRY RUN — no files will be copied or moved"
@@ -97,8 +159,33 @@ if [[ ! -d "$SRC" ]]; then
 fi
 if [[ ! -d "$DST" ]]; then
   echo "❌  Destination not found: $DST"
-  echo "    Is the NAS mounted?"
+  echo "    Is the NAS mounted? (create the folder first, or fix --dst/seestar.conf)"
   exit 1
+fi
+
+# ─────────────────────────────────────────────────────────
+# Show resolved paths and confirm the destination
+# ─────────────────────────────────────────────────────────
+echo "══════════════════════════════════════════════════"
+echo "  Seestar sync — resolved paths"
+echo "══════════════════════════════════════════════════"
+echo "  SRC (Seestar): $SRC"
+echo "  DST (NAS):     $DST"
+echo ""
+
+if [[ $DRY_RUN -eq 0 && $ASSUME_YES -eq 0 ]]; then
+  if [[ ! -t 0 ]]; then
+    echo "❌  Refusing to run unattended without confirmation."
+    echo "    Re-run with --yes once you've confirmed the destination above,"
+    echo "    or use --dry-run to preview."
+    exit 1
+  fi
+  read -r -p "  Sync to the destination above? [y/N] " reply
+  case "$reply" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "  Aborted — nothing was changed."; exit 0 ;;
+  esac
+  echo ""
 fi
 
 # ─────────────────────────────────────────────────────────
@@ -107,8 +194,6 @@ fi
 echo "══════════════════════════════════════════════════"
 echo "  STEP 1 — Sync FITS files to NAS (skip JPGs)"
 echo "══════════════════════════════════════════════════"
-echo "  SRC: $SRC"
-echo "  DST: $DST"
 echo ""
 
 rsync "${RSYNC_FLAGS[@]}" \
@@ -130,45 +215,75 @@ fi
 echo ""
 echo "✅  Sync complete."
 
+if [[ $NO_CLEANUP -eq 1 ]]; then
+  echo ""
+  echo "  --no-cleanup set — skipping organise/sort/count steps."
+  echo "══════════════════════════════════════════════════"
+  echo "  ALL DONE"
+  echo "══════════════════════════════════════════════════"
+  exit 0
+fi
+
 # ─────────────────────────────────────────────────────────
 # Step 2: Rename folders (remove spaces)
 # ─────────────────────────────────────────────────────────
-if [[ $NO_CLEANUP -eq 0 ]]; then
-  if [[ -f "$RENAME" ]]; then
-    echo ""
-    echo "══════════════════════════════════════════════════"
-    echo "  STEP 2 — Rename: remove spaces from folder names"
-    echo "══════════════════════════════════════════════════"
-    python3 "$RENAME" "$DST" $CLEANUP_FLAGS
-  else
-    echo "⚠️   rename_seestar_folders.py not found at $RENAME — skipping rename step"
-  fi
+if [[ -f "$RENAME" ]]; then
+  echo ""
+  echo "══════════════════════════════════════════════════"
+  echo "  STEP 2 — Rename: remove spaces from folder names"
+  echo "══════════════════════════════════════════════════"
+  # shellcheck disable=SC2086  # STEP_FLAGS is intentionally split (empty or --dry-run)
+  python3 "$RENAME" "$DST" $STEP_FLAGS
+else
+  echo "⚠️   rename_seestar_folders.py not found at $RENAME — skipping rename step"
+fi
 
 # ─────────────────────────────────────────────────────────
-# Step 3: Organize (move Lights_*.fits → lights/)
+# Step 3: Organize (move Light_*.fits → lights/)
 # ─────────────────────────────────────────────────────────
-  if [[ -f "$CLEANUP" ]]; then
-    echo ""
-    echo "══════════════════════════════════════════════════"
-    echo "  STEP 3 — Organize: move subs into lights/"
-    echo "══════════════════════════════════════════════════"
-    python3 "$CLEANUP" "$DST" $CLEANUP_FLAGS
-  else
-    echo "⚠️   cleanup_seestar.py not found at $CLEANUP — skipping organize step"
+if [[ -f "$ORGANIZE" ]]; then
+  echo ""
+  echo "══════════════════════════════════════════════════"
+  echo "  STEP 3 — Organize: move subs into lights/"
+  echo "══════════════════════════════════════════════════"
+  # shellcheck disable=SC2086  # STEP_FLAGS is intentionally split (empty or --dry-run)
+  python3 "$ORGANIZE" "$DST" $STEP_FLAGS
+else
+  echo "⚠️   organize_subs.py not found at $ORGANIZE — skipping organize step"
+fi
+
+# ─────────────────────────────────────────────────────────
+# Step 3b: Sort subs by exposure into <exptime>s/lights/
+# ─────────────────────────────────────────────────────────
+if [[ -f "$SORT" ]]; then
+  echo ""
+  echo "══════════════════════════════════════════════════"
+  echo "  STEP 3b — Sort subs by exposure (Siril-ready)"
+  echo "══════════════════════════════════════════════════"
+  # shellcheck disable=SC2086  # STEP_FLAGS is intentionally split (empty or --dry-run)
+  python3 "$SORT" --all "$DST" $STEP_FLAGS
+  SORT_EXIT=$?
+  if [[ $SORT_EXIT -ne 0 ]]; then
+    echo "⚠️   exposure-sort step failed (exit $SORT_EXIT)."
+    echo "    Subs were synced but not split by exposure. Often this is a missing"
+    echo "    dependency: pip install astropy --break-system-packages"
   fi
+else
+  echo "⚠️   sort_by_exptime.py not found at $SORT — skipping exposure-sort step"
+fi
 
 # ─────────────────────────────────────────────────────────
 # Step 4: Count subs + update inventory
 # ─────────────────────────────────────────────────────────
-  if [[ -f "$COUNT" ]]; then
-    echo ""
-    echo "══════════════════════════════════════════════════"
-    echo "  STEP 4 — Sub counts + inventory update"
-    echo "══════════════════════════════════════════════════"
-    python3 "$COUNT" "$DST" --update-inventory $CLEANUP_FLAGS
-  else
-    echo "⚠️   count_subs.py not found at $COUNT — skipping count step"
-  fi
+if [[ -f "$COUNT" ]]; then
+  echo ""
+  echo "══════════════════════════════════════════════════"
+  echo "  STEP 4 — Sub counts + inventory update"
+  echo "══════════════════════════════════════════════════"
+  # shellcheck disable=SC2086  # STEP_FLAGS is intentionally split (empty or --dry-run)
+  python3 "$COUNT" "$DST" --update-inventory $STEP_FLAGS
+else
+  echo "⚠️   count_subs.py not found at $COUNT — skipping count step"
 fi
 
 echo ""

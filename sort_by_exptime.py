@@ -61,15 +61,27 @@ from collections import defaultdict
 from typing import Optional
 
 # ── dependencies ─────────────────────────────────────────────────────────────
+# astropy is imported lazily (see _fits_module) so this module can be imported —
+# and its pure helpers unit-tested — without astropy installed. Only the actual
+# FITS-header read in read_exptime() needs it.
 
-try:
-    from astropy.io import fits
-except ImportError:
-    sys.exit(
-        "astropy not found.\n"
-        "Install:  pip install astropy --break-system-packages\n"
-        "     or:  /opt/homebrew/bin/pip3 install astropy"
-    )
+_FITS_MODULE = None
+
+
+def _fits_module():
+    """Import astropy.io.fits on first use; exit with an install hint if missing."""
+    global _FITS_MODULE
+    if _FITS_MODULE is None:
+        try:
+            from astropy.io import fits
+        except ImportError:
+            sys.exit(
+                "astropy not found.\n"
+                "Install:  pip install astropy --break-system-packages\n"
+                "     or:  /opt/homebrew/bin/pip3 install astropy"
+            )
+        _FITS_MODULE = fits
+    return _FITS_MODULE
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -88,6 +100,7 @@ def is_fits(path: pathlib.Path) -> bool:
 
 def read_exptime(path: pathlib.Path) -> Optional[float]:
     """Return EXPTIME (seconds) from the FITS primary header, or None on error."""
+    fits = _fits_module()
     try:
         with fits.open(path, memmap=False, ignore_missing_simple=True) as hdul:
             val = hdul[0].header.get("EXPTIME")
@@ -118,11 +131,25 @@ SKIP_DIR_NAMES = {
 
 # ── core ──────────────────────────────────────────────────────────────────────
 
+def is_already_sorted(directory: pathlib.Path, root: pathlib.Path) -> bool:
+    """
+    True if *directory* already sits under an exposure-label folder, e.g.
+    root/M_51_sub/10s/lights or root/M_51_sub/20s. Such locations are canonical
+    and must be skipped so re-runs are idempotent and never re-nest
+    (…/10s/10s/…). Pure function — no filesystem access.
+    """
+    try:
+        rel = directory.relative_to(root)
+    except ValueError:
+        return False
+    return any(EXPTIME_DIR_RE.match(part) for part in rel.parts)
+
+
 def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
     """
     Return every directory under *root* that contains FITS files directly,
     excluding:
-      • directories whose name looks like an exposure label (10s, 20s …)
+      • directories already under an <exptime>s/ label (canonical — done)
       • Siril working directories (process/, registered/, stack/, etc.)
       • *root* itself (top-level stacked masters live there; leave them alone)
     """
@@ -133,8 +160,8 @@ def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
         parent = f.parent
         if parent == root:
             continue                              # skip top-level masters
-        if EXPTIME_DIR_RE.match(parent.name):
-            continue                              # already sorted
+        if is_already_sorted(parent, root):
+            continue                              # already in <exptime>s/…
         if parent.name.lower() in SKIP_DIR_NAMES:
             continue                              # Siril working dirs
         seen.add(parent)
@@ -175,20 +202,16 @@ def sort_directory(target: pathlib.Path, dry_run: bool) -> None:
         print(f"    no readable FITS — nothing to do")
         return
 
-    if len(by_exptime) == 1:
-        exp = next(iter(by_exptime))
-        print(
-            f"    {len(by_exptime[exp])} × {exptime_label(exp)}"
-            f" — uniform, no sort needed"
-        )
-        return
-
-    # Multiple exposure lengths → sort
-    # Destination: <target.parent>/<exptime>/<target.name>/
-    # e.g. M_101_sub/lights/ → M_101_sub/10s/lights/ + M_101_sub/20s/lights/
-    # This preserves the lights/ name so batch_stack.py works unchanged.
+    # Sort into per-exposure subfolders — ALWAYS, even when only one exposure
+    # length is present, so every target ends up in the same canonical shape:
+    #   <target>_sub/<exptime>s/lights/
+    # The destination preserves the source dir name (usually "lights") so
+    # batch_stack.py works unchanged.  e.g.
+    #   M_101_sub/lights/ → M_101_sub/10s/lights/ + M_101_sub/20s/lights/
     total = sum(len(v) for v in by_exptime.values())
-    print(f"    {total} files across {len(by_exptime)} exposure lengths — SORTING")
+    n_exp = len(by_exptime)
+    plural = "exposure length" if n_exp == 1 else "exposure lengths"
+    print(f"    {total} files across {n_exp} {plural} — SORTING")
 
     for exp in sorted(by_exptime):
         files = by_exptime[exp]
@@ -208,6 +231,16 @@ def sort_directory(target: pathlib.Path, dry_run: bool) -> None:
                     shutil.move(str(f), dest)
             if skipped:
                 print(f"             (skipped {skipped} already-present file(s))")
+
+    # The old flat source dir (e.g. lights/) is now empty — remove it for
+    # tidiness so only the canonical <exptime>s/lights/ folders remain.
+    if not dry_run:
+        try:
+            if not any(target.iterdir()):
+                target.rmdir()
+                print(f"    removed empty {target.name}/")
+        except OSError:
+            pass
 
     if dry_run:
         print(f"    → re-run without --dry-run to apply")

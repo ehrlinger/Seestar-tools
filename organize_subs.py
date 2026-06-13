@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-cleanup_seestar.py
+organize_subs.py
 
 Cleans up and merges Seestar _sub/_subs folders.
 Assumes you are running from the NAS Seestar archive — path defaults to '.'.
 
 Usage:
-    python3 cleanup_seestar.py                    # organize current directory
-    python3 cleanup_seestar.py /path/to/Seestar   # explicit path
-    python3 cleanup_seestar.py --dry-run          # preview, no changes
-    python3 cleanup_seestar.py --merge            # merge multi-night sessions
-    python3 cleanup_seestar.py --remove-empty     # delete empty _sub folders
-    python3 cleanup_seestar.py -h                 # this help
+    python3 organize_subs.py                    # organize current directory
+    python3 organize_subs.py /path/to/Seestar   # explicit path
+    python3 organize_subs.py --dry-run          # preview, no changes
+    python3 organize_subs.py --merge            # merge multi-night sessions
+    python3 organize_subs.py --remove-empty     # delete empty _sub folders
+    python3 organize_subs.py -h                 # this help
 
 The script is safe to run multiple times (idempotent):
   - Won't move files already in lights/

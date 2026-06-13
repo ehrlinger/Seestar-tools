@@ -8,99 +8,100 @@ import unittest
 from collections import defaultdict
 from pathlib import Path
 
-# Make the repo root importable so we can `import cleanup_seestar` etc.
+# Make the repo root importable so we can `import organize_subs` etc.
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 import batch_stack
-import cleanup_seestar
+import organize_subs
 import count_subs
 import rename_seestar_folders
+import sort_by_exptime
 
 
 class CanonicalTargetNameTests(unittest.TestCase):
-    """cleanup_seestar.canonical_target_name — strips _sub/_subs + session suffix."""
+    """organize_subs.canonical_target_name — strips _sub/_subs + session suffix."""
 
     def test_plain_sub_suffix(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51_sub"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51_sub"), "M 51")
 
     def test_plain_subs_suffix(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("NGC 6946_subs"), "NGC 6946")
+        self.assertEqual(organize_subs.canonical_target_name("NGC 6946_subs"), "NGC 6946")
 
     def test_iso_date_session(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51 2026-05-22_sub"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51 2026-05-22_sub"), "M 51")
 
     def test_compact_date_session(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51_20260522_sub"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51_20260522_sub"), "M 51")
 
     def test_bare_index_session(self):
         # "_sub_2" middle suffix — distinct from a bare trailing digit on the target
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51_sub_2"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51_sub_2"), "M 51")
 
     def test_subs_index_session(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51_subs_3"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51_subs_3"), "M 51")
 
     def test_parenthesised_index_session(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51 (2)_sub"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51 (2)_sub"), "M 51")
 
     def test_no_suffix_returned_unchanged(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("M 51"), "M 51")
+        self.assertEqual(organize_subs.canonical_target_name("M 51"), "M 51")
 
     def test_target_without_digits_unchanged(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("Veil_sub"), "Veil")
+        self.assertEqual(organize_subs.canonical_target_name("Veil_sub"), "Veil")
 
     def test_target_without_digits_with_date(self):
-        self.assertEqual(cleanup_seestar.canonical_target_name("Veil 2026-05-22_sub"), "Veil")
+        self.assertEqual(organize_subs.canonical_target_name("Veil 2026-05-22_sub"), "Veil")
 
     def test_does_not_strip_target_number_from_bare_name(self):
         # Regression: the old bare-\d+ branch would turn "NGC 6946" into "NGC"
-        self.assertEqual(cleanup_seestar.canonical_target_name("NGC 6946"), "NGC 6946")
+        self.assertEqual(organize_subs.canonical_target_name("NGC 6946"), "NGC 6946")
 
 
 class IsProcessedTests(unittest.TestCase):
-    """cleanup_seestar.is_processed — recognises stacked/processed outputs."""
+    """organize_subs.is_processed — recognises stacked/processed outputs."""
 
     def test_raw_seestar_light_is_not_processed(self):
-        self.assertFalse(cleanup_seestar.is_processed("Light_M_51_10.0s_IRCUT_20260509-013344.fit"))
+        self.assertFalse(organize_subs.is_processed("Light_M_51_10.0s_IRCUT_20260509-013344.fit"))
 
     def test_starless_prefix(self):
-        self.assertTrue(cleanup_seestar.is_processed("starless_M51.fit"))
+        self.assertTrue(organize_subs.is_processed("starless_M51.fit"))
 
     def test_starmask_prefix(self):
-        self.assertTrue(cleanup_seestar.is_processed("starmask_M51.fit"))
+        self.assertTrue(organize_subs.is_processed("starmask_M51.fit"))
 
     def test_stack_prefix(self):
-        self.assertTrue(cleanup_seestar.is_processed("stack_M51.fit"))
+        self.assertTrue(organize_subs.is_processed("stack_M51.fit"))
 
     def test_r_pp_prefix(self):
-        self.assertTrue(cleanup_seestar.is_processed("r_pp_Light_001.fit"))
+        self.assertTrue(organize_subs.is_processed("r_pp_Light_001.fit"))
 
     def test_graxpert_marker(self):
-        self.assertTrue(cleanup_seestar.is_processed("M51_GraXpert.fits"))
+        self.assertTrue(organize_subs.is_processed("M51_GraXpert.fits"))
 
     def test_pp_marker(self):
-        self.assertTrue(cleanup_seestar.is_processed("M51_pp.fit"))
+        self.assertTrue(organize_subs.is_processed("M51_pp.fit"))
 
     def test_processed_marker(self):
-        self.assertTrue(cleanup_seestar.is_processed("M51_processed.fit"))
+        self.assertTrue(organize_subs.is_processed("M51_processed.fit"))
 
     def test_stacked_filename_pattern(self):
-        self.assertTrue(cleanup_seestar.is_processed("M_51_1175x20sec_T25degC_2026-05-15.fit"))
+        self.assertTrue(organize_subs.is_processed("M_51_1175x20sec_T25degC_2026-05-15.fit"))
 
 
 class SafeDestTests(unittest.TestCase):
-    """cleanup_seestar.safe_dest — appends _dupN when destination exists."""
+    """organize_subs.safe_dest — appends _dupN when destination exists."""
 
     def test_returns_dest_unchanged_when_free(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td) / "foo.fit"
-            self.assertEqual(cleanup_seestar.safe_dest(dest), dest)
+            self.assertEqual(organize_subs.safe_dest(dest), dest)
 
     def test_appends_dup1_when_dest_exists(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td) / "foo.fit"
             dest.touch()
-            result = cleanup_seestar.safe_dest(dest)
+            result = organize_subs.safe_dest(dest)
             self.assertEqual(result.name, "foo_dup1.fit")
 
     def test_increments_dup_counter_until_free(self):
@@ -109,12 +110,12 @@ class SafeDestTests(unittest.TestCase):
             dest.touch()
             (Path(td) / "foo_dup1.fit").touch()
             (Path(td) / "foo_dup2.fit").touch()
-            result = cleanup_seestar.safe_dest(dest)
+            result = organize_subs.safe_dest(dest)
             self.assertEqual(result.name, "foo_dup3.fit")
 
 
 class GroupByTargetTests(unittest.TestCase):
-    """cleanup_seestar.group_by_target — groups folder paths by canonical name."""
+    """organize_subs.group_by_target — groups folder paths by canonical name."""
 
     def test_groups_by_canonical_name(self):
         # Use date-suffixed names so the canonical_target_name bug doesn't trip us
@@ -123,7 +124,7 @@ class GroupByTargetTests(unittest.TestCase):
             Path("/x/M 51 2026-05-23_sub"),
             Path("/x/Veil_subs"),
         ]
-        groups = cleanup_seestar.group_by_target(folders)
+        groups = organize_subs.group_by_target(folders)
         self.assertEqual(set(groups.keys()), {"M 51", "Veil"})
         self.assertEqual(len(groups["M 51"]), 2)
         self.assertEqual(len(groups["Veil"]), 1)
@@ -133,7 +134,7 @@ class GroupByTargetTests(unittest.TestCase):
             Path("/x/M 51 2026-05-23_sub"),
             Path("/x/M 51 2026-05-22_sub"),
         ]
-        groups = cleanup_seestar.group_by_target(folders)
+        groups = organize_subs.group_by_target(folders)
         primary = groups["M 51"][0]
         self.assertEqual(primary.name, "M 51 2026-05-22_sub")  # earlier date sorts first
 
@@ -272,6 +273,115 @@ class StackedRegexTests(unittest.TestCase):
         self.assertIsNone(
             batch_stack.STACKED_RE.search("Light_M_51_10.0s_IRCUT_20260509-013344.fit")
         )
+
+
+class ExptimeLabelTests(unittest.TestCase):
+    """sort_by_exptime.exptime_label — float exposure → clean folder name."""
+
+    def test_integer_exposure(self):
+        self.assertEqual(sort_by_exptime.exptime_label(10.0), "10s")
+
+    def test_twenty(self):
+        self.assertEqual(sort_by_exptime.exptime_label(20.0), "20s")
+
+    def test_fractional_exposure(self):
+        self.assertEqual(sort_by_exptime.exptime_label(20.5), "20.5s")
+
+
+class ExptimeDirRegexTests(unittest.TestCase):
+    """sort_by_exptime.EXPTIME_DIR_RE — recognises already-sorted exposure dirs."""
+
+    def test_matches_integer_label(self):
+        self.assertIsNotNone(sort_by_exptime.EXPTIME_DIR_RE.match("10s"))
+
+    def test_matches_decimal_label(self):
+        self.assertIsNotNone(sort_by_exptime.EXPTIME_DIR_RE.match("20.5s"))
+
+    def test_does_not_match_lights(self):
+        self.assertIsNone(sort_by_exptime.EXPTIME_DIR_RE.match("lights"))
+
+    def test_does_not_match_target(self):
+        self.assertIsNone(sort_by_exptime.EXPTIME_DIR_RE.match("M_51_sub"))
+
+
+class IsAlreadySortedTests(unittest.TestCase):
+    """sort_by_exptime.is_already_sorted — pure path predicate, no filesystem."""
+
+    def setUp(self):
+        self.root = Path("/nas/Seestar")
+
+    def test_canonical_exptime_lights_is_sorted(self):
+        self.assertTrue(
+            sort_by_exptime.is_already_sorted(self.root / "M_51_sub/10s/lights", self.root)
+        )
+
+    def test_exptime_dir_itself_is_sorted(self):
+        self.assertTrue(
+            sort_by_exptime.is_already_sorted(self.root / "M_51_sub/20s", self.root)
+        )
+
+    def test_flat_lights_is_not_sorted(self):
+        self.assertFalse(
+            sort_by_exptime.is_already_sorted(self.root / "M_51_sub/lights", self.root)
+        )
+
+    def test_target_root_is_not_sorted(self):
+        self.assertFalse(
+            sort_by_exptime.is_already_sorted(self.root / "M_51_sub", self.root)
+        )
+
+    def test_outside_root_returns_false(self):
+        self.assertFalse(
+            sort_by_exptime.is_already_sorted(Path("/other/10s/lights"), self.root)
+        )
+
+
+class ResolveInventoryPathTests(unittest.TestCase):
+    """count_subs.resolve_inventory_path — --inventory > SEESTAR_VAULT_INV > default."""
+
+    def test_explicit_file_wins(self):
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "Inv.md"
+            f.write_text("x", encoding="utf-8")
+            self.assertEqual(count_subs.resolve_inventory_path(str(f)), f)
+
+    def test_directory_gets_standard_relpath_appended(self):
+        with tempfile.TemporaryDirectory() as td:
+            inv = Path(td) / "Astrophotography" / "AstroImages Inventory.md"
+            inv.parent.mkdir(parents=True)
+            inv.write_text("x", encoding="utf-8")
+            resolved = count_subs.resolve_inventory_path(str(td))
+            self.assertEqual(resolved, inv)
+
+    def test_missing_returns_none(self):
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            old_default = count_subs._VAULT_INV
+            old_env = os.environ.pop("SEESTAR_VAULT_INV", None)
+            count_subs._VAULT_INV = Path(td) / "no-such-default.md"
+            try:
+                self.assertIsNone(
+                    count_subs.resolve_inventory_path(str(Path(td) / "nope.md"))
+                )
+            finally:
+                count_subs._VAULT_INV = old_default
+                if old_env is not None:
+                    os.environ["SEESTAR_VAULT_INV"] = old_env
+
+    def test_env_var_used_when_no_explicit(self):
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "Env.md"
+            f.write_text("x", encoding="utf-8")
+            old = os.environ.get("SEESTAR_VAULT_INV")
+            os.environ["SEESTAR_VAULT_INV"] = str(f)
+            try:
+                self.assertEqual(count_subs.resolve_inventory_path(None), f)
+            finally:
+                if old is None:
+                    os.environ.pop("SEESTAR_VAULT_INV", None)
+                else:
+                    os.environ["SEESTAR_VAULT_INV"] = old
 
 
 if __name__ == "__main__":

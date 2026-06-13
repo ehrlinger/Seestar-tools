@@ -12,6 +12,9 @@ Usage:
     python3 count_subs.py --csv                    # export CSV
     python3 count_subs.py --update-inventory       # sync counts → vault + local copy
     python3 count_subs.py --update-inventory --dry-run  # preview without writing
+    python3 count_subs.py --update-inventory --inventory "/path/to/Inventory.md"
+                                                   # explicit inventory location
+                                                   # (else uses $SEESTAR_VAULT_INV, then default)
     python3 count_subs.py -h                       # this help
 
 Inventory update writes to:
@@ -308,11 +311,45 @@ def deduplicate(results: list[dict]) -> list[dict]:
 # Inventory update — write sub counts back into AstroImages Inventory.md
 # ---------------------------------------------------------------------------
 
-# Hardcoded vault path (canonical source of truth)
+# Built-in default vault path (fallback when neither --inventory nor the
+# SEESTAR_VAULT_INV env var / seestar.conf is set).
 _VAULT_INV = Path(
     "~/Library/Mobile Documents/iCloud~md~obsidian/Documents"
     "/Obsidian Vault/Astrophotography/AstroImages Inventory.md"
 ).expanduser()
+
+# Standard inventory path relative to a vault folder (used when the resolved
+# path points at a directory rather than the .md file itself).
+_STD_INV_REL = Path("Astrophotography") / "AstroImages Inventory.md"
+
+
+def resolve_inventory_path(explicit: str | None = None) -> Path | None:
+    """
+    Resolve the inventory .md path in priority order:
+      1. --inventory PATH command-line argument
+      2. SEESTAR_VAULT_INV environment variable
+         (exported from seestar.conf by sync_seestar.sh)
+      3. the built-in _VAULT_INV default
+    A directory value gets the standard 'Astrophotography/AstroImages
+    Inventory.md' appended. Returns the first candidate that exists, else None.
+    """
+    import os
+
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+    env = os.environ.get("SEESTAR_VAULT_INV", "").strip()
+    if env:
+        candidates.append(env)
+    candidates.append(str(_VAULT_INV))
+
+    for c in candidates:
+        p = Path(c).expanduser()
+        if p.is_dir():
+            p = p / _STD_INV_REL
+        if p.exists():
+            return p
+    return None
 
 
 def prompt_for_inventory() -> Path | None:
@@ -340,17 +377,21 @@ def _write_inventory(content: str, path: Path, label: str) -> None:
     print(f"   💾 Saved → {label}")
 
 
-def update_inventory(results: list[dict], root: Path, dry_run: bool = False) -> None:
+def update_inventory(results: list[dict], root: Path, dry_run: bool = False,
+                     inventory_arg: str | None = None) -> None:
     """
     Parse AstroImages Inventory.md and update the Subs column for each
     target row that matches a folder in results. Leaves all other columns
     (Object, Notes, Status) untouched.
 
+    The inventory location is resolved via resolve_inventory_path() — an
+    explicit --inventory arg, then SEESTAR_VAULT_INV, then the built-in default.
+
     Writes to:
-      1. The vault copy (canonical)
+      1. The resolved vault copy (canonical)
       2. A local copy in root/ for quick reference
     """
-    inventory_path = _VAULT_INV if _VAULT_INV.exists() else prompt_for_inventory()
+    inventory_path = resolve_inventory_path(inventory_arg) or prompt_for_inventory()
     if inventory_path is None:
         return
 
@@ -442,8 +483,26 @@ def main():
         print(__doc__)
         sys.exit(0)
 
-    args  = [a for a in sys.argv[1:] if not a.startswith("-")]
-    flags = [a for a in sys.argv[1:] if a.startswith("-")]
+    # Parse argv: separate positionals, flags, and the valued --inventory option.
+    raw = sys.argv[1:]
+    args: list[str] = []
+    flags: list[str] = []
+    inventory_arg: str | None = None
+    skip_next = False
+    for i, a in enumerate(raw):
+        if skip_next:
+            skip_next = False
+            continue
+        if a.startswith("--inventory="):
+            inventory_arg = a.split("=", 1)[1]
+        elif a == "--inventory":
+            if i + 1 < len(raw):
+                inventory_arg = raw[i + 1]
+                skip_next = True
+        elif a.startswith("-"):
+            flags.append(a)
+        else:
+            args.append(a)
 
     do_csv        = "--csv"              in flags
     do_update_inv = "--update-inventory" in flags
@@ -482,7 +541,7 @@ def main():
         write_csv(deduped, root / "subs_inventory.csv")
 
     if do_update_inv:
-        update_inventory(deduped, root, dry_run=dry_run)
+        update_inventory(deduped, root, dry_run=dry_run, inventory_arg=inventory_arg)
 
 
 if __name__ == "__main__":
