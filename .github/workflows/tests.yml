@@ -29,7 +29,7 @@ jobs:
       - name: Sanity-import all scripts
         # Catches import-time errors (bad path expressions, syntax) on every OS
         run: |
-          python -c "import batch_stack, cleanup_seestar, count_subs, rename_seestar_folders; print('all modules import on', __import__('sys').platform)"
+          python -c "import batch_stack, organize_subs, count_subs, rename_seestar_folders, sort_by_exptime, purge_siril_cruft; print('all modules import on', __import__('sys').platform)"
 
   shellcheck:
     name: bash syntax (sync_seestar.sh)

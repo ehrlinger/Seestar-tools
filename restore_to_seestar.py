@@ -3,7 +3,7 @@
 restore_to_seestar.py  —  Put one archived target back onto the Seestar EMMC
                           in native layout so the app can re-process it.
 
-This is the *inverse* of the archive pipeline (cleanup_seestar.py +
+This is the *inverse* of the archive pipeline (organize_subs.py +
 rename_seestar_folders.py + sort_by_exptime.py).  Those scripts, in order:
 
     "M 51_sub"           → "M_51_sub"          (spaces → underscores)
@@ -54,7 +54,7 @@ NOTES
 -----
     • Copies, never moves — your NAS archive is left untouched.
     • Won't overwrite: name clashes get a _dupN suffix (matches
-      cleanup_seestar.py's safe_dest convention).
+      organize_subs.py's safe_dest convention).
     • Paths default from  seestar.conf  (same file the other tools read).
     • Run from local disk, not a network share — macOS kills Python
       processes spawned from NFS/SMB volumes.

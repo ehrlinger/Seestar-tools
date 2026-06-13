@@ -1,0 +1,28 @@
+# seestar.conf.example — configuration template for seestar-tools
+#
+# Copy this file to seestar.conf and edit the paths for your machine:
+#
+#     cp seestar.conf.example seestar.conf
+#
+# seestar.conf is gitignored, so your personal paths stay off GitHub.
+# sync_seestar.sh sources this file; command-line --src/--dst override it.
+#
+# Paths with spaces are fine — quote the whole value (as below). Do NOT
+# backslash-escape spaces inside the quotes.
+
+# ── Source: the Seestar EMMC "MyWorks" folder when the scope is connected ──
+# macOS:    "/Volumes/EMMC Images/MyWorks/"
+# Linux:    "/media/$USER/EMMC Images/MyWorks/"
+# Windows:  "/mnt/c/Users/<you>/EMMC Images/MyWorks/"   (WSL)
+SEESTAR_EMMC="/Volumes/EMMC Images/MyWorks/"
+
+# ── Destination: your NAS Seestar archive folder ──
+# This is where subs are organised into <target>_sub/<exptime>s/lights/.
+# Double-check this path — it is what the whole pipeline operates on.
+SEESTAR_NAS="/Volumes/YourNAS/Seestar/"
+
+# ── Obsidian inventory file (optional) ──
+# Full path to the AstroImages Inventory.md that count_subs.py updates with
+# --update-inventory. Point it at the .md file itself (not the vault folder).
+# Leave blank to use count_subs.py's built-in default. Tilde (~) is expanded.
+SEESTAR_VAULT_INV="~/Obsidian/Astrophotography/AstroImages Inventory.md"

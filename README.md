@@ -6,13 +6,17 @@ Data management pipeline for the ZWO Seestar S50 smart telescope. Syncs FITS fil
 
 ## Scripts
 
+The pipeline runs in three phases: **ingest** (sync from the scope to the NAS, safely), **organise** (folder structure + per-exposure sort, so subs are Siril-ready), and — after you stack in Siril — **cleanup** (purge regenerable scratch for disk sanity).
+
 | Script | What it does |
 |--------|-------------|
-| `sync_seestar.sh` | Full pipeline: rsync → rename → organise → count + inventory update |
+| `sync_seestar.sh` | Full pipeline: rsync → rename → organise → sort-by-exposure → count + inventory update. Confirms the destination before writing; `--src`/`--dst` override the config |
 | `rename_seestar_folders.py` | Removes spaces from `_sub`/`_subs` folder names |
-| `cleanup_seestar.py` | Moves raw FITS into `lights/`, merges multi-night sessions, removes empties |
+| `organize_subs.py` | Moves raw FITS into `lights/`, merges multi-night sessions, removes empties |
 | `count_subs.py` | Counts subs per target, updates Obsidian inventory markdown |
 | `batch_stack.py` | Batch-runs Siril's `Seestar_Preprocessing` script across all pending folders |
+| `sort_by_exptime.py` | Sorts subs into per-exposure folders (`10s/`, `20s/`) by reading FITS `EXPTIME` |
+| `purge_siril_cruft.py` | Reclaims archive space: deletes Siril `process/` dirs, `Copy #N of …` duplicates, and double-`starless_` files, then hands `lights/` to `sort_by_exptime.py`. Dry-run by default |
 
 ## Setup
 
@@ -72,7 +76,7 @@ Then inside the Ubuntu WSL shell, treat it like any Linux setup (steps 1-4 above
 
 **Alternative shells:**
 - **git-bash** runs the .sh script fine, but doesn't ship `rsync` — install it via MSYS2 (`pacman -S rsync`) or use [cwRsync](https://itefix.net/cwrsync).
-- **PowerShell / cmd.exe**: the Python scripts (`cleanup_seestar.py`, `count_subs.py`, `rename_seestar_folders.py`, `batch_stack.py`) work fine when invoked directly with `python` — only the orchestrating `sync_seestar.sh` wrapper is bash-bound.
+- **PowerShell / cmd.exe**: the Python scripts (`organize_subs.py`, `count_subs.py`, `rename_seestar_folders.py`, `batch_stack.py`) work fine when invoked directly with `python` — only the orchestrating `sync_seestar.sh` wrapper is bash-bound.
 
 **Caveats on native Windows:**
 - Terminal output uses emoji (✅ ❌ ⚠️ 📁). Modern Windows Terminal and PowerShell 7 render them fine; legacy `cmd.exe` may show boxes.
@@ -82,15 +86,28 @@ Then inside the Ubuntu WSL shell, treat it like any Linux setup (steps 1-4 above
 ## Full pipeline
 
 ```bash
-# Run everything: sync → rename → organise → count + inventory
+# Run everything: sync → rename → organise → sort-by-exposure → count + inventory.
+# Prints the resolved SRC → DST and asks for confirmation before writing.
 ./sync_seestar.sh
 
-# Preview without making changes
+# Sync to a specific destination (overrides seestar.conf — use this to avoid
+# accidentally writing to the wrong NAS folder):
+./sync_seestar.sh --dst /Volumes/YourNAS/Seestar/
+
+# Override both ends:
+./sync_seestar.sh --src "/Volumes/EMMC Images/MyWorks/" --dst /Volumes/YourNAS/Seestar/
+
+# Preview without making changes (no confirmation prompt):
 ./sync_seestar.sh --dry-run
 
-# Sync only, skip organise/count steps
+# Skip the confirmation prompt (for scripted/cron runs):
+./sync_seestar.sh --yes
+
+# Sync only, skip organise/sort/count steps:
 ./sync_seestar.sh --no-cleanup
 ```
+
+Path resolution is **`--src`/`--dst` → `seestar.conf` → platform defaults**, so a command-line path always wins. A non-dry-run sync confirms the destination before touching anything (`--yes` to skip); run unattended without `--yes` and it refuses rather than guessing.
 
 ## Batch stacking
 
@@ -116,11 +133,38 @@ python3 batch_stack.py /Volumes/YourNAS/Seestar/ "M 51"
 python3 rename_seestar_folders.py /Volumes/YourNAS/Seestar/
 
 # Organise + merge multi-night sessions
-python3 cleanup_seestar.py /Volumes/YourNAS/Seestar/ --merge
+python3 organize_subs.py /Volumes/YourNAS/Seestar/ --merge
 
 # Count subs and update inventory
 python3 count_subs.py /Volumes/YourNAS/Seestar/ --update-inventory
 ```
+
+## Archive cleanup
+
+Seestar archive folders accumulate disposable Siril cruft that dwarfs the real
+data: `process/` working dirs (regenerated on every re-stack), `Copy #N of …`
+duplicates, and double-processed `starless_starless_*` / `starmask_starless_*`
+files. `purge_siril_cruft.py` removes those three categories and leaves raw
+subs, stacked masters, and single starless/starmask outputs untouched.
+
+```bash
+# Dry-run the whole archive (default — deletes nothing, prints reclaim totals)
+python3 purge_siril_cruft.py /Volumes/YourNAS/Seestar/
+
+# One target
+python3 purge_siril_cruft.py /Volumes/YourNAS/Seestar/ --target M_51_sub
+
+# Apply for real
+python3 purge_siril_cruft.py /Volumes/YourNAS/Seestar/ --apply
+
+# Skip the exposure-sort hand-off (otherwise needs astropy)
+python3 purge_siril_cruft.py /Volumes/YourNAS/Seestar/ --apply --no-sort
+```
+
+**Safety:** dry-run by default; idempotent; a `Copy #N of X` is deleted only
+when its original `X` is present in the same folder (orphans are kept and
+flagged). The exposure-sort step requires `astropy`
+(`pip install astropy --break-system-packages`).
 
 ## Tests
 
@@ -155,7 +199,7 @@ In GitHub: **Settings → Branches → Add branch ruleset** for `main`:
 - ✅ Require linear history (matches the squash-merge convention)
 - ✅ Do not allow bypassing the above settings *(uncheck if you want admin override for personal use)*
 
-For data-touching scripts (`cleanup_seestar.py --merge`, `batch_stack.py`), always run with `--dry-run` against real archives before merging the PR — tests cover parsing, not filesystem semantics.
+For data-touching scripts (`organize_subs.py --merge`, `batch_stack.py`), always run with `--dry-run` against real archives before merging the PR — tests cover parsing, not filesystem semantics.
 
 ## Requirements
 
