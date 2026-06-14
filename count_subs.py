@@ -89,10 +89,14 @@ def get_exptime(fits_path: Path) -> float | None:
 
 def collect_fits_files(sub_dir: Path) -> list[Path]:
     """
-    Return all FITS files in a _sub/_subs folder:
-      - First look in lights/ subdir (organised)
-      - Also include any loose FITS at the root (not yet moved)
-    Excludes processed/stacked files by name heuristic.
+    Return all raw FITS files in a _sub/_subs folder, across every layout:
+      - the flat lights/ subdir
+      - the lights/ of any immediate child dir — the mount-mode folders altaz/ and
+        eq/, or a legacy per-exposure 10s/ / 20s/ (darks/ and flats/ have no lights/
+        inside, so they're skipped naturally)
+      - any loose FITS at the root (not yet moved into lights/)
+    Excludes processed/stacked files by name heuristic (starless_, stacked
+    masters, etc.).
     """
     SKIP_PREFIXES = ("starless_", "starmask_", "stack_", "r_pp_", "result")
     SKIP_SUBSTRINGS = ("_processed.", "_GraXpert.", "_pp.")

@@ -635,7 +635,7 @@ class NormalizeTargetTests(unittest.TestCase):
 
 class CollectFitsFilesTests(unittest.TestCase):
     """count_subs.collect_fits_files — must count subs in EVERY layout: a flat
-    lights/, the mount-mode folders altaz//eq/, and legacy <exp>s/, without
+    lights/, the mount-mode folders altaz/ and eq/, and legacy <exp>s/, without
     picking up darks/ or flats/."""
 
     def _fits(self, d: Path, name: str):
