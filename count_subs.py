@@ -29,6 +29,8 @@ from datetime import date
 from pathlib import Path
 from collections import defaultdict
 
+from seestar_common import is_in_excluded
+
 try:
     from astropy.io import fits as astropy_fits
     HAS_ASTROPY = True
@@ -49,7 +51,9 @@ def find_sub_folders(root: Path, filter_name: str = "") -> list[Path]:
     """Find all *_sub and *_subs directories, optionally filtered by name."""
     folders = sorted(
         p for p in root.rglob("*")
-        if p.is_dir() and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        if p.is_dir()
+        and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        and not is_in_excluded(p, root)
     )
     if filter_name:
         folders = [f for f in folders if filter_name.lower() in f.name.lower()]

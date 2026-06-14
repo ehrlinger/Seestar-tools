@@ -31,6 +31,8 @@ import re
 from pathlib import Path
 from collections import defaultdict
 
+from seestar_common import is_in_excluded
+
 # ---------------------------------------------------------------------------
 # Patterns that identify PROCESSED files — never move these to lights/
 # ---------------------------------------------------------------------------
@@ -121,7 +123,9 @@ def is_processed(filename: str) -> bool:
 def find_sub_folders(root: Path) -> list[Path]:
     return sorted(
         p for p in root.rglob("*")
-        if p.is_dir() and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        if p.is_dir()
+        and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        and not is_in_excluded(p, root)
     )
 
 

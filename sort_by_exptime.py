@@ -60,6 +60,8 @@ import sys
 from collections import defaultdict
 from typing import Optional
 
+from seestar_common import is_in_excluded
+
 # ── dependencies ─────────────────────────────────────────────────────────────
 # astropy is imported lazily (see _fits_module) so this module can be imported —
 # and its pure helpers unit-tested — without astropy installed. Only the actual
@@ -159,6 +161,7 @@ def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
     excluding:
       • directories already under an <exptime>s/ label (canonical — done)
       • Siril working directories (process/, registered/, stack/, etc.)
+      • excluded trees (_trash/, scripts/)
       • *root* itself (top-level stacked masters live there; leave them alone)
     """
     seen: set[pathlib.Path] = set()
@@ -168,6 +171,8 @@ def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
         parent = f.parent
         if parent == root:
             continue                              # skip top-level masters
+        if is_in_excluded(parent, root):
+            continue                              # _trash/, scripts/, etc.
         if is_already_sorted(parent, root):
             continue                              # already in <exptime>s/…
         if parent.name.lower() in SKIP_DIR_NAMES:
