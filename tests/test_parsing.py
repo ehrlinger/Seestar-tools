@@ -634,6 +634,44 @@ class NormalizeTargetTests(unittest.TestCase):
             self.assertNotIn("removed empty lights/", out)
 
 
+class CollectFitsFilesTests(unittest.TestCase):
+    """count_subs.collect_fits_files — must count subs in EVERY layout: a flat
+    lights/, the mount-mode folders altaz/ and eq/, and legacy <exp>s/, without
+    picking up darks/ or flats/."""
+
+    def _fits(self, d: Path, name: str):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"fits")
+
+    def test_counts_mode_split_altaz_and_eq(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_51_sub"
+            self._fits(t / "altaz" / "lights", "Light_10.0s_a.fit")
+            self._fits(t / "eq" / "lights", "Light_20.0s_b.fit")
+            self._fits(t / "eq" / "lights", "Light_30.0s_c.fit")
+            names = sorted(f.name for f in count_subs.collect_fits_files(t))
+            self.assertEqual(
+                names, ["Light_10.0s_a.fit", "Light_20.0s_b.fit", "Light_30.0s_c.fit"]
+            )
+
+    def test_still_counts_flat_and_legacy_exposure_folders(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "lights", "Light_20.0s_flat.fit")
+            self._fits(t / "10s" / "lights", "Light_10.0s_legacy.fit")
+            names = sorted(f.name for f in count_subs.collect_fits_files(t))
+            self.assertEqual(names, ["Light_10.0s_legacy.fit", "Light_20.0s_flat.fit"])
+
+    def test_ignores_darks_and_flats(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_1_sub"
+            self._fits(t / "eq" / "lights", "Light_20.0s_a.fit")
+            self._fits(t / "darks", "dark.fit")   # no lights/ inside → ignored
+            self._fits(t / "flats", "flat.fit")
+            names = [f.name for f in count_subs.collect_fits_files(t)]
+            self.assertEqual(names, ["Light_20.0s_a.fit"])
+
+
 class ResolveInventoryPathTests(unittest.TestCase):
     """count_subs.resolve_inventory_path — --inventory > SEESTAR_VAULT_INV > default."""
 
