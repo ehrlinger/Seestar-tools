@@ -36,6 +36,7 @@ once it reaches a tagged release.
 - **CSV writer encoding** in `count_subs.py` now explicitly sets `encoding="utf-8"`. Previously it defaulted to the platform locale (`cp1252` on Windows), which would mangle non-ASCII target names.
 
 ### Changed
+- **Sync now keeps the Seestar in-app stack JPGs.** `sync_seestar.sh` Step 1 previously excluded *all* `*.jpg`. It now excludes only the per-sub thumbnails under `*_sub/` (thousands of `Light_*.jpg` / `*_thn.jpg`) and **keeps the in-app `Stacked_*.jpg` previews** in the `<target>/` folders — the not-reproducible-in-Siril renderings whose filenames encode provenance (`Stacked_<N>_<target>_<exp>s_…` → sub count + exposure).
 - **Renamed two scripts for clarity** (they read as two "clean*" tools doing opposite things):
   `cleanup_seestar.py` → **`organize_subs.py`** (it *organises* subs into `lights/` and merges nights — it never deleted data), and
   `clean_seestar_archive.py` → **`purge_siril_cruft.py`** (it *purges* regenerable Siril `process/` scratch + duplicates).
