@@ -1,27 +1,36 @@
 #!/usr/bin/env python3
 """
-sort_by_exptime.py  —  Sort Seestar FITS subs into per-exposure subfolders.
+sort_by_exptime.py  —  Normalise a Seestar target to its canonical layout.
 
-Alt-az captures (10 s, to suppress star trails) and EQ captures (20 s+)
-should be stacked separately in Siril.  This script reads EXPTIME from
-each FITS primary header and moves files into  10s/,  20s/,  etc.
-subfolders.
+Subs are grouped by MOUNT MODE, not by raw exposure. A Seestar shoots ~10 s
+in alt-az (kept short to beat field rotation) and 20 s+ in EQ; alt-az and EQ
+frames must be stacked separately (different rotation / quality profile), but
+different lengths WITHIN one mode (e.g. 20 s + 30 s EQ) belong in one deeper
+stack. So:
 
-The script recurses into date/session subdirectories so it works regardless
-of how deep the FITS files are nested inside a target folder.  Each
-directory that contains FITS files is sorted independently.  Directories
-whose names already look like an exposure label (e.g. "10s", "20s") are
-skipped so re-runs are safe.
+    one mount mode   →  <target>_sub/lights/                       (flat)
+    both modes        →  <target>_sub/altaz/lights/ + eq/lights/    (split)
+
+Mode is inferred from exposure (< ~15 s ⇒ alt-az, ≥ ~15 s ⇒ EQ — see
+MODE_BOUNDARY_SECONDS). A single-mode target stays flat so a hand-run of Siril
+finds the subs directly; only a target spanning both modes is split.
+
+The script reads each target as a whole and CONVERGES it to the canonical shape
+from any starting state — flat, mode-split, or the legacy per-exposure
+(10s/, 20s/, 30s/) layout — and is a no-op once canonical. Mode comes from the
+folder name where it already encodes it (altaz/, eq/, or a legacy <exp>s/ label),
+or from the FITS header for frames loose in a flat lights/ (no header read for
+already-grouped frames).
 
 USAGE
 -----
   # Always dry-run first:
   python3 sort_by_exptime.py --dry-run M_51_sub/
 
-  # Sort a single target folder (recurses automatically):
+  # Normalise a single target folder:
   python3 sort_by_exptime.py M_51_sub/
 
-  # Sort every *_sub folder under a root:
+  # Normalise every *_sub folder under a root:
   python3 sort_by_exptime.py --all /Volumes/NAS/Seestar/
 
   # Dry-run everything:
@@ -30,19 +39,21 @@ USAGE
   # Pass multiple explicit folders:
   python3 sort_by_exptime.py M_51_sub/ M_27_sub/ M_57_sub/
 
-AFTER SORTING
--------------
-  Files move from  M_101_sub/lights/  into:
-    M_101_sub/10s/lights/   (alt-az subs)
-    M_101_sub/20s/lights/   (EQ subs)
+AFTER NORMALISING
+-----------------
+  A single-mode target stays flat:   M_57_sub/lights/         (e.g. 20 s+30 s EQ)
+  A both-modes target is split:      M_63_sub/altaz/lights/   (10 s alt-az)
+                                     M_63_sub/eq/lights/      (20 s + 30 s EQ)
 
-  Point batch_stack.py at the exposure folder — it finds lights/ inside:
+  batch_stack.py finds and stacks every shape automatically — point it at the
+  archive root, a <target>_sub, or an individual altaz/ or eq/ folder:
 
-    python3 batch_stack.py "M 101_sub/20s/"
+    python3 batch_stack.py /Volumes/NAS/Seestar/
 
-  Or loop all exposure subfolders for a target:
-
-    for d in "M 101_sub"/*/; do python3 batch_stack.py "$d"; done
+  Running Siril by hand instead? Seestar_Preprocessing.ssf opens with
+  `cd lights`, so set the working directory to whatever folder directly holds
+  lights/: the <target>_sub root for a single-mode target, or the altaz/ or eq/
+  folder for a both-modes one.
 
 NOTES
 -----
@@ -57,7 +68,6 @@ import pathlib
 import re
 import shutil
 import sys
-from collections import defaultdict
 from typing import Optional
 
 from seestar_common import is_in_excluded
@@ -118,17 +128,24 @@ def exptime_label(exptime: float) -> str:
     return f"{int(exptime)}s" if exptime == int(exptime) else f"{exptime}s"
 
 
-# ── exptime-label pattern (matches already-sorted folders like "10s", "20.5s") ─
+# ── exptime-label pattern (matches legacy per-exposure folders "10s", "20.5s") ─
 
 EXPTIME_DIR_RE = re.compile(r'^\d+(\.\d+)?s$')
 
-# Siril working dirs and other non-raw locations to leave alone
-SKIP_DIR_NAMES = {
-    "process", "processing",  # Siril preprocessed frames (pp_light_*, r_pp_light_*)
-    "registered",             # Siril registered frames
-    "stack",                  # stacked outputs
-    "biases", "darks", "flats",  # calibration frames
-}
+# ── mount mode ─────────────────────────────────────────────────────────────────
+# A Seestar shoots ~10 s subs in alt-az (kept short to beat field rotation) and
+# 20 s+ in EQ. Mount mode — not raw exposure — is what should be stacked
+# separately: alt-az frames carry field rotation and a different quality profile,
+# while EQ frames of different lengths (20 s, 30 s) are the same tracked mode and
+# combine into one deeper integration. Exposures below this boundary are treated
+# as alt-az, at/above as EQ. Adjust here if your rig uses different lengths.
+MODE_BOUNDARY_SECONDS = 15.0
+MODE_DIR_NAMES = ("altaz", "eq")
+
+
+def mount_mode(exptime: float) -> str:
+    """Map an exposure (seconds) to its Seestar mount mode: 'altaz' or 'eq'."""
+    return "altaz" if exptime < MODE_BOUNDARY_SECONDS else "eq"
 
 
 # ── core ──────────────────────────────────────────────────────────────────────
@@ -147,116 +164,199 @@ def is_already_sorted(directory: pathlib.Path, root: pathlib.Path) -> bool:
     return any(EXPTIME_DIR_RE.match(part) for part in rel.parts)
 
 
+def plan_layout(
+    modes: dict, target_sub: pathlib.Path
+) -> dict:
+    """
+    Decide where each light frame belongs and return ``{src: dest}`` for the
+    files that must move to reach the canonical shape, keyed on MOUNT MODE:
+
+      • one mount mode   →  FLAT:  ``<target>_sub/lights/<name>``
+                            (even if lengths differ — 20 s + 30 s EQ combine)
+      • both modes        →  SPLIT: ``<target>_sub/<mode>/lights/<name>``
+                            (``altaz/`` and ``eq/`` stacked separately)
+
+    *modes* maps each light file to its mount-mode label (``"altaz"``/``"eq"``)
+    or ``None`` when the exposure couldn't be read. "How many modes" counts only
+    the *known* labels: a lone unknown frame never forces a split, and in the
+    flat case it lands in ``lights/`` like everything else. In the split case an
+    unknown frame can't be placed, so it is left where it is (the caller warns).
+    Files already at their destination are omitted, so re-running is a no-op.
+    Pure function — no filesystem access.
+    """
+    known_modes = {m for m in modes.values() if m is not None}
+    flat = len(known_modes) <= 1
+
+    moves: dict = {}
+    for src, mode in modes.items():
+        if flat:
+            dest = target_sub / "lights" / src.name
+        else:
+            if mode is None:
+                continue  # unknown mode — can't file it into altaz/ or eq/
+            dest = target_sub / mode / "lights" / src.name
+        if src != dest:
+            moves[src] = dest
+    return moves
+
+
 def find_target_dirs(root: pathlib.Path) -> list[pathlib.Path]:
-    """Top-level *_sub / *_subs directories under root (used by --all)."""
+    """Top-level *_sub / *_subs directories under root (used by --all), skipping
+    anything inside an excluded tree (_trash/, scripts/)."""
     return sorted(
         d for d in root.iterdir()
-        if d.is_dir() and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+        if d.is_dir()
+        and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+        and not is_in_excluded(d, root)
     )
 
 
-def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
+def _exp_label_seconds(label: str) -> float:
+    """'20s' → 20.0, '20.5s' → 20.5. Assumes label already matched EXPTIME_DIR_RE."""
+    return float(label[:-1])
+
+
+def gather_lights(target_sub: pathlib.Path) -> dict:
     """
-    Return every directory under *root* that contains FITS files directly,
-    excluding:
-      • directories already under an <exptime>s/ label (canonical — done)
-      • Siril working directories (process/, registered/, stack/, etc.)
-      • excluded trees (_trash/, scripts/)
-      • *root* itself (top-level stacked masters live there; leave them alone)
+    Collect the raw light frames from *target_sub*'s light-bearing folders only —
+    the flat ``lights/``, a canonical mode folder ``altaz/lights/`` or
+    ``eq/lights/``, and a legacy per-exposure ``<exp>s/lights/`` — mapping each to
+    its mount mode (``"altaz"``/``"eq"``) or ``None`` when the exposure couldn't be
+    read. This does NOT walk the whole tree: darks/, flats/, deeper nesting, and
+    Siril working dirs are never touched. Mode comes from
+    the folder name where it already encodes it (``altaz/``/``eq/`` directly, an
+    ``<exp>s/`` label via :func:`mount_mode`); frames loose in the flat ``lights/``
+    have their exposure read from the FITS header and mapped to a mode.
     """
-    seen: set[pathlib.Path] = set()
-    for f in root.rglob("*"):
-        if not (f.is_file() and is_fits(f)):
+    modes: dict = {}
+
+    flat = target_sub / "lights"
+    if flat.is_dir():
+        for f in flat.iterdir():
+            if f.is_file() and is_fits(f):
+                exp = read_exptime(f)
+                modes[f] = mount_mode(exp) if exp is not None else None
+
+    for d in sorted(target_sub.iterdir()):
+        if not d.is_dir():
             continue
-        parent = f.parent
-        if parent == root:
-            continue                              # skip top-level masters
-        if is_in_excluded(parent, root):
-            continue                              # _trash/, scripts/, etc.
-        if is_already_sorted(parent, root):
-            continue                              # already in <exptime>s/…
-        if parent.name.lower() in SKIP_DIR_NAMES:
-            continue                              # Siril working dirs
-        seen.add(parent)
-    return sorted(seen)
-
-
-def sort_directory(target: pathlib.Path, dry_run: bool) -> None:
-    """
-    Read EXPTIME from every FITS file directly in *target* and move each
-    file into a matching  <exptime>/  subfolder.  Already-sorted subfolders
-    (name matches e.g. "20s") are never touched, so re-running is safe.
-    """
-    fits_files = [f for f in target.iterdir() if f.is_file() and is_fits(f)]
-
-    if not fits_files:
-        return   # nothing here; fits_dirs() already filtered empties
-
-    by_exptime: dict[float, list[pathlib.Path]] = defaultdict(list)
-    unreadable: list[pathlib.Path] = []
-
-    print(f"  {target}: reading headers ({len(fits_files)} files) …", end="", flush=True)
-    for f in fits_files:
-        exp = read_exptime(f)
-        if exp is None:
-            unreadable.append(f)
+        nested = d / "lights"
+        if not nested.is_dir():
+            continue
+        if d.name in MODE_DIR_NAMES:
+            label = d.name                              # already a mode folder
+        elif EXPTIME_DIR_RE.match(d.name):
+            label = mount_mode(_exp_label_seconds(d.name))  # legacy <exp>s/
         else:
-            by_exptime[exp].append(f)
-    print(" done")
+            continue
+        for f in nested.iterdir():
+            if f.is_file() and is_fits(f):
+                modes[f] = label
+
+    return modes
+
+
+def _plan_dir_removals(
+    target_sub: pathlib.Path, entries: dict, moves: dict
+) -> list:
+    """
+    Given the gathered lights and the planned moves, return the ``lights/``
+    scaffold directories that will be empty *after* the moves are applied —
+    deepest-first (``<group>/lights/`` before its ``<group>/`` parent, top-level
+    ``lights/`` last). A "group" folder is a canonical mode folder (``altaz/``,
+    ``eq/``) or a legacy per-exposure ``<exp>s/`` left over from the old layout.
+    Computed from the post-move file layout (not the current one), so a dry-run
+    reports exactly what a real run removes: a folder that *receives* frames is
+    never listed, only emptied ones. Never lists darks/ or flats/.
+    """
+    # Where each gathered frame ends up (moved or staying put), counted per dir.
+    files_after: dict = {}
+    for src in entries:
+        dest_dir = moves.get(src, src).parent
+        files_after[dest_dir] = files_after.get(dest_dir, 0) + 1
+
+    removals: list = []
+    for d in sorted(target_sub.iterdir()):
+        if d.is_dir() and (d.name in MODE_DIR_NAMES or EXPTIME_DIR_RE.match(d.name)):
+            nested = d / "lights"
+            if nested.is_dir() and files_after.get(nested, 0) == 0:
+                removals.append(nested)   # emptied — remove before its parent
+                removals.append(d)        # group/ then holds only the empty lights/
+    top = target_sub / "lights"
+    if top.is_dir() and files_after.get(top, 0) == 0:
+        removals.append(top)
+    return removals
+
+
+def normalize_target(target_sub: pathlib.Path, dry_run: bool) -> dict:
+    """
+    Converge *target_sub* to the canonical on-disk shape and return a summary
+    dict ``{"moved": int, "skipped": int, "unreadable": int}``:
+
+      • one mount mode   →  FLAT:  ``<target>_sub/lights/``
+      • both modes        →  SPLIT: ``<target>_sub/altaz/lights/`` + ``…/eq/lights/``
+
+    Single-mode targets stay flat so a hand-run Siril (whose
+    ``Seestar_Preprocessing.ssf`` opens with ``cd lights``) finds the subs;
+    different exposure lengths within one mode (20 s + 30 s EQ) combine into one
+    deeper stack. Only a target spanning both mount modes is split, because alt-az
+    and EQ frames must be stacked separately. Converges from ANY starting state —
+    flat, mode-split, or the legacy per-exposure layout — so re-running is a no-op
+    once canonical (idempotent). A destination collision is never overwritten:
+    that frame is left in place.
+    """
+    modes = gather_lights(target_sub)
+    moves = plan_layout(modes, target_sub)
+    unreadable = [f for f, m in modes.items() if m is None]
+
+    if modes:
+        known = sorted({m for m in modes.values() if m is not None})
+        if len(known) <= 1:
+            shape = f"flat ({known[0] if known else 'unknown'})"
+        else:
+            shape = f"split ({' + '.join(known)})"
+        tag = "[dry-run] " if dry_run else ""
+        print(f"  {target_sub.name}: {len(modes)} light(s) -> {shape}; {tag}{len(moves)} to move")
+
+    # Which empty lights/ scaffolds the moves will leave behind — computed from
+    # the post-move layout so the dry-run report matches a real run exactly.
+    removals = _plan_dir_removals(target_sub, modes, moves)
+
+    # Classify every planned move the same way in dry-run and for real: a frame
+    # whose destination already exists is *skipped* (never overwritten), so the
+    # returned counts and the dry-run preview match an actual run.
+    moved = skipped = 0
+    for src, dest in sorted(moves.items()):
+        if dest.exists():
+            skipped += 1
+            continue
+        if not dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dest))
+        moved += 1
 
     if unreadable:
-        print(f"  ⚠  {len(unreadable)} unreadable file(s):")
+        # ASCII-only so a real run can't UnicodeEncodeError on a Windows console.
+        print(f"    WARNING: {len(unreadable)} unreadable file(s) left in place:")
         for p in unreadable[:5]:
             print(f"       {p.name}")
         if len(unreadable) > 5:
-            print(f"       … and {len(unreadable) - 5} more")
+            print(f"       ... and {len(unreadable) - 5} more")
 
-    if not by_exptime:
-        print(f"    no readable FITS — nothing to do")
-        return
-
-    # Sort into per-exposure subfolders — ALWAYS, even when only one exposure
-    # length is present, so every target ends up in the same canonical shape:
-    #   <target>_sub/<exptime>s/lights/
-    # The destination preserves the source dir name (usually "lights") so
-    # batch_stack.py works unchanged.  e.g.
-    #   M_101_sub/lights/ → M_101_sub/10s/lights/ + M_101_sub/20s/lights/
-    total = sum(len(v) for v in by_exptime.values())
-    n_exp = len(by_exptime)
-    plural = "exposure length" if n_exp == 1 else "exposure lengths"
-    print(f"    {total} files across {n_exp} {plural} — SORTING")
-
-    for exp in sorted(by_exptime):
-        files = by_exptime[exp]
-        # sibling of target's parent: ../10s/lights/
-        dest_dir = target.parent / exptime_label(exp) / target.name
-        tag = "[dry-run] " if dry_run else ""
-        print(f"      {tag}{len(files):>4d} × {exptime_label(exp):>6s}  →  {dest_dir.relative_to(target.parent.parent)}/")
-
-        if not dry_run:
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            skipped = 0
-            for f in files:
-                dest = dest_dir / f.name
-                if dest.exists():
-                    skipped += 1
-                else:
-                    shutil.move(str(f), dest)
-            if skipped:
-                print(f"             (skipped {skipped} already-present file(s))")
-
-    # The old flat source dir (e.g. lights/) is now empty — remove it for
-    # tidiness so only the canonical <exptime>s/lights/ folders remain.
-    if not dry_run:
+    verb = "would remove" if dry_run else "removed"
+    for d in removals:
+        # .as_posix() so the report reads the same on Windows (\) as elsewhere.
+        rel = d.relative_to(target_sub).as_posix()
         try:
-            if not any(target.iterdir()):
-                target.rmdir()
-                print(f"    removed empty {target.name}/")
+            if dry_run:
+                print(f"    {verb} empty {rel}/")
+            elif d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+                print(f"    {verb} empty {rel}/")
         except OSError:
             pass
 
-    if dry_run:
-        print(f"    → re-run without --dry-run to apply")
+    return {"moved": moved, "skipped": skipped, "unreadable": len(unreadable)}
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -303,7 +403,12 @@ def main() -> None:
         print(f"Found {len(targets)} target folder(s) under {root}\n")
 
     for p in args.paths:
-        targets.append(p.expanduser().resolve())
+        t = p.expanduser().resolve()
+        # Tolerate being handed a group subfolder (altaz/, eq/, or a legacy
+        # <exp>s/): normalize its parent target instead.
+        if t.name in MODE_DIR_NAMES or EXPTIME_DIR_RE.match(t.name):
+            t = t.parent
+        targets.append(t)
 
     mode = "DRY RUN — no files will be moved" if args.dry_run else "MOVING FILES"
     print(f"sort_by_exptime  [{mode}]")
@@ -313,14 +418,9 @@ def main() -> None:
         if not target.is_dir():
             print(f"  SKIP (not a directory): {target}")
             continue
-        # Recurse to find every directory that actually contains FITS files
-        # (e.g. M_51_sub/Light/, M_51_sub/20240101/Light/, etc.)
-        dirs = fits_dirs(target)
-        if not dirs:
-            print(f"  {target.name}: no FITS files found anywhere inside")
-            continue
-        for d in dirs:
-            sort_directory(d, dry_run=args.dry_run)
+        # Converge the whole target to canonical shape: flat lights/ for a single
+        # exposure, <exp>s/lights/ only when 2+ exposures are present.
+        normalize_target(target, dry_run=args.dry_run)
 
     print("─" * 60)
     if args.dry_run:

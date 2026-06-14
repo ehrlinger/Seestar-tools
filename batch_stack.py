@@ -21,9 +21,19 @@ Requirements:
 
 Layouts (a "stack unit" is any folder that directly contains a lights/ of
 raw FITS — discovered automatically):
-    legacy flat:   <target>_sub/lights/         → unit = <target>_sub
-    canonical:     <target>_sub/<exp>s/lights/  → unit = <target>_sub/<exp>s
-Each exposure folder is stacked separately (10 s alt-az vs 20 s EQ).
+    single mode:   <target>_sub/lights/             → unit = <target>_sub
+    both modes:    <target>_sub/<mode>/lights/      → unit = <target>_sub/<mode>
+                   (mode ∈ {altaz, eq})
+    legacy:        <target>_sub/<exp>s/lights/      → unit = <target>_sub/<exp>s
+Alt-az and EQ are stacked separately (different mount mode); each unit is its
+own Siril run, so subs of different mount modes never share a stack.
+
+A unit is only ever a folder whose lights/ actually holds raw FITS, so an
+empty top-level <target>_sub/lights/ scaffold sitting beside a populated
+<target>_sub/<mode>/lights/ is ignored — Siril is handed the populated unit,
+where its `cd lights` finds the subs. (Driving Siril by hand, point its
+working directory at whichever folder directly holds lights/: the _sub root
+for a single-mode target, the altaz/ or eq/ folder for a both-modes one.)
 
 How "needs stacking" is determined:
     A unit needs stacking if its lights/ subfolder has FITS files but

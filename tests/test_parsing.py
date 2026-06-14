@@ -94,6 +94,38 @@ class IsProcessedTests(unittest.TestCase):
         self.assertTrue(organize_subs.is_processed("M_51_1175x20sec_T25degC_2026-05-15.fit"))
 
 
+class CleanSubFolderScaffoldTests(unittest.TestCase):
+    """organize_subs.clean_sub_folder — must not leave a misleading empty lights/
+    scaffold over an already-sorted target (the thing that traps a hand-run Siril
+    `cd lights`). lights/ is created lazily, only when a raw FITS needs it."""
+
+    def _run(self, sub_dir: Path):
+        with contextlib.redirect_stdout(io.StringIO()):
+            organize_subs.clean_sub_folder(sub_dir, dry_run=False)
+
+    def test_no_empty_lights_created_when_already_sorted(self):
+        # Mixed target already nested: 10s/lights + 20s/lights, no root FITS.
+        with tempfile.TemporaryDirectory() as td:
+            sub = Path(td) / "M_51_sub"
+            for exp in ("10s", "20s"):
+                (sub / exp / "lights").mkdir(parents=True)
+                (sub / exp / "lights" / "Light.fit").write_bytes(b"fits")
+            self._run(sub)
+            self.assertFalse(
+                (sub / "lights").exists(),
+                "clean_sub_folder created an empty top-level lights/ scaffold",
+            )
+
+    def test_lights_created_when_root_fits_present(self):
+        # New raw subs at the root still get filed into a freshly-made lights/.
+        with tempfile.TemporaryDirectory() as td:
+            sub = Path(td) / "M_99_sub"
+            sub.mkdir()
+            (sub / "Light_M_99_20.0s_x.fit").write_bytes(b"fits")
+            self._run(sub)
+            self.assertTrue((sub / "lights" / "Light_M_99_20.0s_x.fit").exists())
+
+
 class SafeDestTests(unittest.TestCase):
     """organize_subs.safe_dest — appends _dupN when destination exists."""
 
@@ -341,6 +373,266 @@ class IsAlreadySortedTests(unittest.TestCase):
         )
 
 
+class MountModeTests(unittest.TestCase):
+    """sort_by_exptime.mount_mode — exposure → mount mode. Seestar shoots ~10 s
+    in alt-az and 20 s+ in EQ, so short subs are alt-az and long subs are EQ."""
+
+    def test_ten_second_is_altaz(self):
+        self.assertEqual(sort_by_exptime.mount_mode(10.0), "altaz")
+
+    def test_twenty_and_thirty_second_are_eq(self):
+        self.assertEqual(sort_by_exptime.mount_mode(20.0), "eq")
+        self.assertEqual(sort_by_exptime.mount_mode(30.0), "eq")
+
+
+class PlanLayoutTests(unittest.TestCase):
+    """sort_by_exptime.plan_layout — pure planner keyed on MOUNT MODE, not exact
+    exposure. A target with one mount mode is FLAT (<target>_sub/lights/), even if
+    it mixes lengths within that mode (20 s + 30 s EQ stack together); a target
+    with both modes is split into <mode>/lights/ (altaz/, eq/). Keys are mode
+    labels ('altaz'/'eq') or None when unknown. No filesystem access."""
+
+    def setUp(self):
+        self.t = Path("/nas/Seestar/M_57_sub")
+
+    def test_single_mode_already_flat_no_moves(self):
+        modes = {
+            self.t / "lights" / "a.fit": "eq",
+            self.t / "lights" / "b.fit": "eq",
+        }
+        self.assertEqual(sort_by_exptime.plan_layout(modes, self.t), {})
+
+    def test_single_mode_combines_mixed_lengths_to_flat(self):
+        # M_57: 20 s + 30 s, both EQ → one flat lights/ (combine, don't split).
+        modes = {
+            self.t / "20s" / "lights" / "a.fit": "eq",
+            self.t / "30s" / "lights" / "b.fit": "eq",
+        }
+        self.assertEqual(
+            sort_by_exptime.plan_layout(modes, self.t),
+            {
+                self.t / "20s" / "lights" / "a.fit": self.t / "lights" / "a.fit",
+                self.t / "30s" / "lights" / "b.fit": self.t / "lights" / "b.fit",
+            },
+        )
+
+    def test_two_modes_split_into_altaz_and_eq(self):
+        m = Path("/nas/Seestar/M_63_sub")
+        modes = {
+            m / "lights" / "a.fit": "altaz",
+            m / "lights" / "b.fit": "eq",
+        }
+        self.assertEqual(
+            sort_by_exptime.plan_layout(modes, m),
+            {
+                m / "lights" / "a.fit": m / "altaz" / "lights" / "a.fit",
+                m / "lights" / "b.fit": m / "eq" / "lights" / "b.fit",
+            },
+        )
+
+    def test_two_modes_combine_eq_lengths_into_one_eq_folder(self):
+        # M_63: 10 s alt-az + (20 s, 30 s) EQ → altaz/ + a SINGLE eq/ (20 s & 30 s
+        # together), not three folders.
+        m = Path("/nas/Seestar/M_63_sub")
+        modes = {
+            m / "10s" / "lights" / "a.fit": "altaz",
+            m / "20s" / "lights" / "b.fit": "eq",
+            m / "30s" / "lights" / "c.fit": "eq",
+        }
+        moves = sort_by_exptime.plan_layout(modes, m)
+        self.assertEqual(moves[m / "20s" / "lights" / "b.fit"], m / "eq" / "lights" / "b.fit")
+        self.assertEqual(moves[m / "30s" / "lights" / "c.fit"], m / "eq" / "lights" / "c.fit")
+        self.assertEqual(moves[m / "10s" / "lights" / "a.fit"], m / "altaz" / "lights" / "a.fit")
+
+    def test_two_modes_already_split_no_moves(self):
+        m = Path("/nas/Seestar/M_63_sub")
+        modes = {
+            m / "altaz" / "lights" / "a.fit": "altaz",
+            m / "eq" / "lights" / "b.fit": "eq",
+        }
+        self.assertEqual(sort_by_exptime.plan_layout(modes, m), {})
+
+    def test_unknown_mode_in_two_mode_target_stays_put(self):
+        m = Path("/nas/Seestar/M_63_sub")
+        modes = {
+            m / "lights" / "a.fit": "altaz",
+            m / "lights" / "b.fit": "eq",
+            m / "lights" / "c.fit": None,
+        }
+        self.assertNotIn(m / "lights" / "c.fit", sort_by_exptime.plan_layout(modes, m))
+
+    def test_single_mode_with_unknown_stays_flat(self):
+        modes = {
+            self.t / "20s" / "lights" / "a.fit": "eq",
+            self.t / "20s" / "lights" / "b.fit": None,
+        }
+        self.assertEqual(
+            sort_by_exptime.plan_layout(modes, self.t),
+            {
+                self.t / "20s" / "lights" / "a.fit": self.t / "lights" / "a.fit",
+                self.t / "20s" / "lights" / "b.fit": self.t / "lights" / "b.fit",
+            },
+        )
+
+
+class NormalizeTargetTests(unittest.TestCase):
+    """sort_by_exptime.normalize_target — gather lights, plan, move, tidy empties.
+    read_exptime (the astropy boundary) is stubbed; the move/cleanup behaviour is
+    exercised for real against temp directories."""
+
+    def _fits(self, d: Path, name: str):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"fits")
+
+    @contextlib.contextmanager
+    def _exptime_from_name(self):
+        """Stub read_exptime to parse '_<n>.0s' out of the filename (or None)."""
+        import re as _re
+        orig = sort_by_exptime.read_exptime
+        def fake(p):
+            m = _re.search(r"_(\d+(?:\.\d+)?)s", p.name)
+            return float(m.group(1)) if m else None
+        sort_by_exptime.read_exptime = fake
+        try:
+            yield
+        finally:
+            sort_by_exptime.read_exptime = orig
+
+    def _norm(self, t, dry_run=False):
+        # Swallow normalize_target's stdout: it prints a '→' that a Windows cp1252
+        # console can't encode (UnicodeEncodeError) when not captured.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return sort_by_exptime.normalize_target(t, dry_run=dry_run)
+
+    def test_single_exposure_nested_is_flattened(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "20s" / "lights", "a.fit")
+            self._fits(t / "20s" / "lights", "b.fit")
+            self._norm(t)
+            self.assertEqual(
+                sorted(p.name for p in (t / "lights").iterdir()), ["a.fit", "b.fit"]
+            )
+            self.assertFalse((t / "20s").exists())  # emptied nest removed
+
+    def test_empty_toplevel_lights_scaffold_removed_on_flatten(self):
+        # The exact M_13 shape: empty top-level lights/ beside populated 20s/lights/.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            (t / "lights").mkdir(parents=True)            # empty scaffold
+            self._fits(t / "20s" / "lights", "a.fit")
+            self._norm(t)
+            self.assertEqual([p.name for p in (t / "lights").iterdir()], ["a.fit"])
+            self.assertFalse((t / "20s").exists())
+
+    def test_both_modes_flat_split_into_altaz_and_eq(self):
+        # 10 s (alt-az) + 20 s (EQ) loose in lights/ → split by mode.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_51_sub"
+            self._fits(t / "lights", "Light_10.0s_x.fit")
+            self._fits(t / "lights", "Light_20.0s_y.fit")
+            with self._exptime_from_name():
+                self._norm(t)
+            self.assertEqual(
+                [p.name for p in (t / "altaz" / "lights").iterdir()], ["Light_10.0s_x.fit"]
+            )
+            self.assertEqual(
+                [p.name for p in (t / "eq" / "lights").iterdir()], ["Light_20.0s_y.fit"]
+            )
+            self.assertFalse((t / "lights").exists())  # emptied flat removed
+
+    def test_single_mode_eq_combines_20s_and_30s_to_flat(self):
+        # The M_57 case: 20 s + 30 s are both EQ → ONE flat lights/, not split.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_57_sub"
+            self._fits(t / "20s" / "lights", "a.fit")
+            self._fits(t / "30s" / "lights", "b.fit")
+            self._norm(t)
+            self.assertEqual(
+                sorted(p.name for p in (t / "lights").iterdir()), ["a.fit", "b.fit"]
+            )
+            self.assertFalse((t / "20s").exists())
+            self.assertFalse((t / "30s").exists())
+
+    def test_three_exposure_target_collapses_to_altaz_plus_combined_eq(self):
+        # The M_63 case: 10 s + 20 s + 30 s → altaz/ (10 s) + eq/ (20 s & 30 s).
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_63_sub"
+            self._fits(t / "10s" / "lights", "alt.fit")
+            self._fits(t / "20s" / "lights", "eq20.fit")
+            self._fits(t / "30s" / "lights", "eq30.fit")
+            self._norm(t)
+            self.assertEqual([p.name for p in (t / "altaz" / "lights").iterdir()], ["alt.fit"])
+            self.assertEqual(
+                sorted(p.name for p in (t / "eq" / "lights").iterdir()), ["eq20.fit", "eq30.fit"]
+            )
+            for legacy in ("10s", "20s", "30s"):
+                self.assertFalse((t / legacy).exists())
+
+    def test_idempotent_when_already_mode_split(self):
+        # A canonical two-mode target (altaz/ + eq/) must be a no-op on re-run.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_63_sub"
+            self._fits(t / "altaz" / "lights", "alt.fit")
+            self._fits(t / "eq" / "lights", "eq.fit")
+            summary = self._norm(t)
+            self.assertEqual(summary["moved"], 0)
+            self.assertTrue((t / "altaz" / "lights" / "alt.fit").exists())
+            self.assertTrue((t / "eq" / "lights" / "eq.fit").exists())
+
+    def test_dry_run_counts_existing_destination_as_skipped(self):
+        # A frame whose destination already exists must count as *skipped*, not
+        # moved — and the dry-run summary must agree with a real run.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "30s" / "lights", "Light_30.0s_a.fit")   # → lights/…
+            self._fits(t / "lights", "Light_30.0s_a.fit")           # …already there
+            with self._exptime_from_name():
+                summary = self._norm(t, dry_run=True)
+            self.assertEqual(summary["moved"], 0)
+            self.assertEqual(summary["skipped"], 1)
+
+    def test_idempotent_when_already_flat_single(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "lights", "Light_20.0s_a.fit")
+            with self._exptime_from_name():
+                self._norm(t)
+                self.assertEqual(
+                    [p.name for p in (t / "lights").iterdir()], ["Light_20.0s_a.fit"]
+                )
+                self._norm(t)  # second run
+            self.assertEqual(
+                [p.name for p in (t / "lights").iterdir()], ["Light_20.0s_a.fit"]
+            )
+
+    def test_dry_run_moves_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "20s" / "lights", "a.fit")
+            self._norm(t, dry_run=True)
+            self.assertTrue((t / "20s" / "lights" / "a.fit").exists())  # untouched
+            self.assertFalse((t / "lights").exists())
+
+    def test_dry_run_reports_only_dirs_that_would_actually_empty(self):
+        # M_13 shape: empty top-level lights/ (will RECEIVE the flattened files)
+        # beside populated 20s/lights/. The dry-run must report removing 20s/lights/
+        # and 20s/ — NOT the top-level lights/, which ends up populated.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            (t / "lights").mkdir(parents=True)        # empty scaffold
+            self._fits(t / "20s" / "lights", "a.fit")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                sort_by_exptime.normalize_target(t, dry_run=True)
+            out = buf.getvalue()
+            self.assertIn("20s/lights/", out)
+            self.assertIn("20s/", out)
+            # The bare top-level lights/ must NOT be reported as a removal.
+            self.assertNotIn("remove empty lights/", out)
+            self.assertNotIn("removed empty lights/", out)
+
+
 class ResolveInventoryPathTests(unittest.TestCase):
     """count_subs.resolve_inventory_path — --inventory > SEESTAR_VAULT_INV > default."""
 
@@ -430,6 +722,21 @@ class FindStackUnitsTests(unittest.TestCase):
             root = Path(td)
             (root / "M_99_sub" / "lights").mkdir(parents=True)  # empty lights/
             self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    def test_single_exposure_with_empty_toplevel_lights(self):
+        # The real M_13 shape: organize re-creates an empty <target>_sub/lights/
+        # scaffold while the actual subs live in <target>_sub/20s/lights/. The
+        # unit must be ONLY the populated 20s folder — never the _sub root, whose
+        # empty lights/ would send Siril's `cd lights` into an empty directory and
+        # stack nothing. Guards the "set the working dir to 20s, not M_13_sub" trap.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_13_sub" / "lights").mkdir(parents=True)  # empty scaffold
+            self._mkfits(root / "M_13_sub" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual(
+                [u.relative_to(root).as_posix() for u in units], ["M_13_sub/20s"]
+            )
 
     def test_ignores_macos_resource_fork_only_lights(self):
         with tempfile.TemporaryDirectory() as td:
@@ -693,13 +1000,13 @@ class ExcludesTrashTests(unittest.TestCase):
             units = [u.relative_to(root).as_posix() for u in batch_stack.find_stack_units(root)]
             self.assertEqual(units, ["M_1_sub"])
 
-    def test_sort_fits_dirs_skips_trash(self):
+    def test_sort_find_target_dirs_skips_trash(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            self._mkfits(root / "M_1_sub" / "lights")
-            self._mkfits(root / "_trash" / "M_2_sub" / "lights")
-            dirs = [d.relative_to(root).as_posix() for d in sort_by_exptime.fits_dirs(root)]
-            self.assertEqual(dirs, ["M_1_sub/lights"])
+            (root / "M_1_sub").mkdir()
+            (root / "_trash" / "M_2_sub").mkdir(parents=True)
+            names = [d.name for d in sort_by_exptime.find_target_dirs(root)]
+            self.assertEqual(names, ["M_1_sub"])
 
 
 if __name__ == "__main__":
