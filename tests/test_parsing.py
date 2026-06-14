@@ -498,12 +498,18 @@ class NormalizeTargetTests(unittest.TestCase):
         finally:
             sort_by_exptime.read_exptime = orig
 
+    def _norm(self, t, dry_run=False):
+        # Swallow normalize_target's stdout: it prints a '→' that a Windows cp1252
+        # console can't encode (UnicodeEncodeError) when not captured.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return sort_by_exptime.normalize_target(t, dry_run=dry_run)
+
     def test_single_exposure_nested_is_flattened(self):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td) / "M_13_sub"
             self._fits(t / "20s" / "lights", "a.fit")
             self._fits(t / "20s" / "lights", "b.fit")
-            sort_by_exptime.normalize_target(t, dry_run=False)
+            self._norm(t)
             self.assertEqual(
                 sorted(p.name for p in (t / "lights").iterdir()), ["a.fit", "b.fit"]
             )
@@ -515,7 +521,7 @@ class NormalizeTargetTests(unittest.TestCase):
             t = Path(td) / "M_13_sub"
             (t / "lights").mkdir(parents=True)            # empty scaffold
             self._fits(t / "20s" / "lights", "a.fit")
-            sort_by_exptime.normalize_target(t, dry_run=False)
+            self._norm(t)
             self.assertEqual([p.name for p in (t / "lights").iterdir()], ["a.fit"])
             self.assertFalse((t / "20s").exists())
 
@@ -526,7 +532,7 @@ class NormalizeTargetTests(unittest.TestCase):
             self._fits(t / "lights", "Light_10.0s_x.fit")
             self._fits(t / "lights", "Light_20.0s_y.fit")
             with self._exptime_from_name():
-                sort_by_exptime.normalize_target(t, dry_run=False)
+                self._norm(t)
             self.assertEqual(
                 [p.name for p in (t / "altaz" / "lights").iterdir()], ["Light_10.0s_x.fit"]
             )
@@ -541,7 +547,7 @@ class NormalizeTargetTests(unittest.TestCase):
             t = Path(td) / "M_57_sub"
             self._fits(t / "20s" / "lights", "a.fit")
             self._fits(t / "30s" / "lights", "b.fit")
-            sort_by_exptime.normalize_target(t, dry_run=False)
+            self._norm(t)
             self.assertEqual(
                 sorted(p.name for p in (t / "lights").iterdir()), ["a.fit", "b.fit"]
             )
@@ -555,7 +561,7 @@ class NormalizeTargetTests(unittest.TestCase):
             self._fits(t / "10s" / "lights", "alt.fit")
             self._fits(t / "20s" / "lights", "eq20.fit")
             self._fits(t / "30s" / "lights", "eq30.fit")
-            sort_by_exptime.normalize_target(t, dry_run=False)
+            self._norm(t)
             self.assertEqual([p.name for p in (t / "altaz" / "lights").iterdir()], ["alt.fit"])
             self.assertEqual(
                 sorted(p.name for p in (t / "eq" / "lights").iterdir()), ["eq20.fit", "eq30.fit"]
@@ -569,7 +575,7 @@ class NormalizeTargetTests(unittest.TestCase):
             t = Path(td) / "M_63_sub"
             self._fits(t / "altaz" / "lights", "alt.fit")
             self._fits(t / "eq" / "lights", "eq.fit")
-            summary = sort_by_exptime.normalize_target(t, dry_run=False)
+            summary = self._norm(t)
             self.assertEqual(summary["moved"], 0)
             self.assertTrue((t / "altaz" / "lights" / "alt.fit").exists())
             self.assertTrue((t / "eq" / "lights" / "eq.fit").exists())
@@ -579,11 +585,11 @@ class NormalizeTargetTests(unittest.TestCase):
             t = Path(td) / "M_13_sub"
             self._fits(t / "lights", "Light_20.0s_a.fit")
             with self._exptime_from_name():
-                sort_by_exptime.normalize_target(t, dry_run=False)
+                self._norm(t)
                 self.assertEqual(
                     [p.name for p in (t / "lights").iterdir()], ["Light_20.0s_a.fit"]
                 )
-                sort_by_exptime.normalize_target(t, dry_run=False)  # second run
+                self._norm(t)  # second run
             self.assertEqual(
                 [p.name for p in (t / "lights").iterdir()], ["Light_20.0s_a.fit"]
             )
@@ -592,7 +598,7 @@ class NormalizeTargetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td) / "M_13_sub"
             self._fits(t / "20s" / "lights", "a.fit")
-            sort_by_exptime.normalize_target(t, dry_run=True)
+            self._norm(t, dry_run=True)
             self.assertTrue((t / "20s" / "lights" / "a.fit").exists())  # untouched
             self.assertFalse((t / "lights").exists())
 
