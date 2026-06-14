@@ -2,6 +2,8 @@
 Characterization tests for the pure parsing/grouping functions.
 Run with:  python3 -m unittest discover -s tests -v
 """
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -382,6 +384,133 @@ class ResolveInventoryPathTests(unittest.TestCase):
                     os.environ.pop("SEESTAR_VAULT_INV", None)
                 else:
                     os.environ["SEESTAR_VAULT_INV"] = old
+
+
+class MergeIntoExistingTests(unittest.TestCase):
+    """rename_seestar_folders.merge_into_existing — fold a space-named donor
+    folder into the already-canonical destination instead of skipping."""
+
+    def _mkfits(self, path: Path, name: str) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        f = path / name
+        f.write_bytes(b"fits")
+        return f
+
+    def _merge(self, donor, dest, dry_run):
+        # Capture stdout: merge_into_existing prints emoji progress, which
+        # crashes on a cp1252 console (Windows CI). The test asserts on
+        # filesystem state + return value, not console output.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return rename_seestar_folders.merge_into_existing(donor, dest, dry_run=dry_run)
+
+    def test_moves_new_donor_root_fits_into_existing_dest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            # Existing canonical archive already has a sorted sub.
+            self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            # New incremental sync dropped a raw sub at the donor root.
+            self._mkfits(donor, "Light_0003.fit")
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertTrue((dest / "Light_0003.fit").exists())
+            self.assertFalse(donor.exists())
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual(res["deduped"], 0)
+
+    def test_dedupes_filename_already_present_anywhere_in_dest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            already = self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            # Donor re-delivers a sub that already lives in the sorted tree.
+            self._mkfits(donor, "Light_0001.fit")
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertEqual(res["moved"], 0)
+            self.assertEqual(res["deduped"], 1)
+            self.assertFalse(donor.exists())
+            # The already-sorted sub is untouched; no stray copy at dest root.
+            self.assertTrue(already.exists())
+            self.assertFalse((dest / "Light_0001.fit").exists())
+
+    def test_same_name_different_size_is_kept_not_deleted(self):
+        # Hardening: dedupe only when name AND size match. A same-name file with
+        # a DIFFERENT size is not the same frame, so it must be preserved, never
+        # silently unlinked. (Existing copy lives elsewhere in the tree, so the
+        # donor copy lands at the dest root un-renamed — no path collision.)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            sorted_dir = dest / "20s" / "lights"
+            sorted_dir.mkdir(parents=True)
+            (sorted_dir / "Light_0001.fit").write_bytes(b"AAAA")          # size 4
+            donor.mkdir()
+            (donor / "Light_0001.fit").write_bytes(b"BBBBBBBB")           # size 8
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertEqual(res["deduped"], 0)
+            self.assertEqual(res["moved"], 1)
+            self.assertFalse(donor.exists())
+            # Original sorted sub untouched; donor copy preserved at dest root.
+            self.assertEqual((sorted_dir / "Light_0001.fit").read_bytes(), b"AAAA")
+            self.assertEqual((dest / "Light_0001.fit").read_bytes(), b"BBBBBBBB")
+
+    def test_true_path_collision_renamed_to_dup_not_overwritten(self):
+        # Same name + different size at the SAME relative path → collision-safe
+        # _dupN rename, original preserved (never overwritten or unlinked).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            dest.mkdir()
+            (dest / "Light_0002.fit").write_bytes(b"AAAA")               # size 4
+            donor.mkdir()
+            (donor / "Light_0002.fit").write_bytes(b"BBBBBBBB")          # size 8
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertEqual(res["deduped"], 0)
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual((dest / "Light_0002.fit").read_bytes(), b"AAAA")
+            self.assertEqual((dest / "Light_0002_dup1.fit").read_bytes(), b"BBBBBBBB")
+
+    def test_preserves_donor_subtree_structure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            dest.mkdir()
+            self._mkfits(donor / "lights", "Light_0009.fit")
+
+            self._merge(donor, dest, dry_run=False)
+
+            self.assertTrue((dest / "lights" / "Light_0009.fit").exists())
+            self.assertFalse(donor.exists())
+
+    def test_dry_run_makes_no_changes_but_reports_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            self._mkfits(donor, "Light_0003.fit")
+
+            res = self._merge(donor, dest, dry_run=True)
+
+            # Nothing on disk changed...
+            self.assertTrue(donor.exists())
+            self.assertTrue((donor / "Light_0003.fit").exists())
+            self.assertFalse((dest / "Light_0003.fit").exists())
+            # ...but the report shows what WOULD happen.
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual(res["deduped"], 0)
 
 
 if __name__ == "__main__":
