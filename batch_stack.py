@@ -17,9 +17,15 @@ Usage:
 Requirements:
     siril-cli on PATH  (add /Applications/Siril.app/Contents/MacOS to PATH)
 
+Layouts (a "stack unit" is any folder that directly contains a lights/ of
+raw FITS — discovered automatically):
+    legacy flat:   <target>_sub/lights/         → unit = <target>_sub
+    canonical:     <target>_sub/<exp>s/lights/  → unit = <target>_sub/<exp>s
+Each exposure folder is stacked separately (10 s alt-az vs 20 s EQ).
+
 How "needs stacking" is determined:
-    A folder needs stacking if its lights/ subfolder has FITS files but
-    no stacked result file (*x*sec*.fit) exists in the _sub folder itself.
+    A unit needs stacking if its lights/ subfolder has FITS files but
+    no stacked result file (*x*sec*.fit) exists in the unit folder itself.
 """
 
 import re
@@ -104,14 +110,52 @@ def find_script() -> Path | None:
     return None
 
 
-def find_sub_folders(root: Path, filter_name: str = "") -> list[Path]:
-    folders = sorted(
-        p for p in root.rglob("*")
-        if p.is_dir() and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+def is_raw_fits(f: Path) -> bool:
+    """True for a real FITS file, skipping macOS ._ resource-fork siblings."""
+    return (
+        f.is_file()
+        and f.suffix in FITS_EXTENSIONS
+        and not f.name.startswith("._")
     )
+
+
+def unit_label(unit: Path, root: Path) -> str:
+    """Human-readable label for a stack unit, relative to root when possible."""
+    try:
+        rel = unit.relative_to(root)
+    except ValueError:
+        return unit.name
+    return unit.name if str(rel) == "." else str(rel)
+
+
+def find_stack_units(root: Path, filter_name: str = "") -> list[Path]:
+    """
+    Return every directory that is ready to stack: one that directly contains a
+    ``lights/`` subfolder holding at least one raw FITS file. This matches both
+    on-disk layouts:
+
+      • legacy flat:   ``<target>_sub/lights/``        → unit = ``<target>_sub``
+      • canonical:     ``<target>_sub/<exp>s/lights/`` → unit = ``<target>_sub/<exp>s``
+
+    Each exposure folder is its own unit, because 10 s alt-az and 20 s EQ subs
+    must be stacked separately. Pointing directly at an ``<exp>s/`` folder works
+    too (the unit is then the root itself).
+
+    ``filter_name`` is a case-insensitive substring matched against the unit's
+    path relative to root, so ``"M_51"`` matches ``M_51_sub/20s``.
+    """
+    units: set[Path] = set()
+    for lights in root.rglob("lights"):
+        if not lights.is_dir():
+            continue
+        if any(is_raw_fits(f) for f in lights.iterdir()):
+            units.add(lights.parent)
+
+    result = sorted(units)
     if filter_name:
-        folders = [f for f in folders if filter_name.lower() in f.name.lower()]
-    return folders
+        fl = filter_name.lower()
+        result = [u for u in result if fl in unit_label(u, root).lower()]
+    return result
 
 
 def has_lights(sub_dir: Path) -> bool:
@@ -119,11 +163,7 @@ def has_lights(sub_dir: Path) -> bool:
     lights = sub_dir / "lights"
     if not lights.exists():
         return False
-    return any(
-        f.suffix in FITS_EXTENSIONS
-        for f in lights.iterdir()
-        if f.is_file()
-    )
+    return any(is_raw_fits(f) for f in lights.iterdir())
 
 
 PROCESSED_PREFIXES = ("._", "starless_", "starmask_", "r_pp_", "pp_", "stack_")
@@ -159,11 +199,11 @@ def has_stack(sub_dir: Path) -> Path | None:
 
 
 def count_lights(sub_dir: Path) -> int:
-    """Count raw FITS files in lights/."""
+    """Count raw FITS files in lights/ (skips macOS ._ resource forks)."""
     lights = sub_dir / "lights"
     if not lights.exists():
         return 0
-    return sum(1 for f in lights.iterdir() if f.is_file() and f.suffix in FITS_EXTENSIONS)
+    return sum(1 for f in lights.iterdir() if is_raw_fits(f))
 
 
 def stacked_count(stack_file: Path) -> int | None:
@@ -202,7 +242,7 @@ def needs_stacking(sub_dir: Path) -> tuple[bool, str]:
         if lights_dir.exists():
             newest_light = max(
                 (f.stat().st_mtime for f in lights_dir.iterdir()
-                 if f.is_file() and f.suffix in FITS_EXTENSIONS),
+                 if is_raw_fits(f)),
                 default=0.0,
             )
             if newest_light <= stack_mtime:
@@ -378,18 +418,21 @@ def main():
         print(f"{'='*60}")
     print()
 
-    # Find folders
-    all_folders = find_sub_folders(root, filter_name)
-    assessed = [(f, *needs_stacking(f)) for f in all_folders]
+    # Find stackable units — directories that hold a lights/ of raw FITS.
+    # Works for both the legacy flat (<target>_sub/lights/) and the canonical
+    # exposure-sorted (<target>_sub/<exp>s/lights/) layouts; each exposure is
+    # stacked independently.
+    all_units = find_stack_units(root, filter_name)
+    assessed = [(f, *needs_stacking(f)) for f in all_units]
     pending  = [(f, reason) for f, should, reason in assessed if should]
     skipped  = [(f, reason) for f, should, reason in assessed if not should]
 
-    print(f"Found {len(all_folders)} _sub/_subs folder(s):")
+    print(f"Found {len(all_units)} stackable folder(s):")
     print(f"  Pending (needs stacking) : {len(pending)}")
     print(f"  Skipped                  : {len(skipped)}")
     if skipped:
         for f, reason in skipped:
-            print(f"    • {f.name}  [{reason}]")
+            print(f"    • {unit_label(f, root)}  [{reason}]")
     print()
 
     if not pending:
@@ -407,15 +450,16 @@ def main():
 
     try:
         for i, (sub_dir, reason) in enumerate(pending, 1):
+            label = unit_label(sub_dir, root)
             print(f"{'─'*60}")
-            print(f"[{i}/{len(pending)}] {sub_dir.name}  [{reason}]")
+            print(f"[{i}/{len(pending)}] {label}  [{reason}]")
             print(f"{'─'*60}")
             ok = stack_folder(sub_dir, script_path, dry_run)
             if ok is None:
                 # NAS offline — stop cleanly so the user can remount and retry
                 nas_stopped = True
                 break
-            (succeeded if ok else failed).append(sub_dir.name)
+            (succeeded if ok else failed).append(label)
             print()
     finally:
         keepalive.set()  # always stop the background thread

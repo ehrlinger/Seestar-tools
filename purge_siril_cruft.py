@@ -163,6 +163,14 @@ class Tally:
         return self.proc_bytes + self.copy_bytes + self.dbl_bytes
 
 
+def find_target_dirs(root: Path) -> list[Path]:
+    """Top-level *_sub / *_subs directories under root (default target set)."""
+    return sorted(
+        d for d in root.iterdir()
+        if d.is_dir() and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+    )
+
+
 def clean_target(target: Path, dry_run: bool) -> Tally:
     t = Tally()
     print(f"\n  {target.name}")
@@ -259,7 +267,7 @@ def main() -> None:
     if args.target:
         targets = [root / t for t in args.target]
     else:
-        targets = sorted(d for d in root.iterdir() if d.is_dir() and d.name.endswith("_sub"))
+        targets = find_target_dirs(root)
     targets = [t for t in targets if t.is_dir()]
     if not targets:
         sys.exit(f"No target folders found under {root}")

@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import batch_stack
 import organize_subs
 import count_subs
+import purge_siril_cruft
 import rename_seestar_folders
 import sort_by_exptime
 
@@ -382,6 +383,97 @@ class ResolveInventoryPathTests(unittest.TestCase):
                     os.environ.pop("SEESTAR_VAULT_INV", None)
                 else:
                     os.environ["SEESTAR_VAULT_INV"] = old
+
+
+class FindStackUnitsTests(unittest.TestCase):
+    """batch_stack.find_stack_units — locate stackable units (dirs holding a
+    lights/ of raw FITS) under BOTH the legacy flat and canonical exp-sorted
+    layouts."""
+
+    def _mkfits(self, d: Path, name: str = "Light_M_51_20.0s_IRCUT_20260501.fit"):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"fits")
+
+    def test_legacy_flat_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_57_sub" / "lights")
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual([u.name for u in units], ["M_57_sub"])
+
+    def test_canonical_exposure_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_51_sub" / "10s" / "lights")
+            self._mkfits(root / "M_51_sub" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root)
+            rels = sorted(str(u.relative_to(root)) for u in units)
+            # Each exposure folder is its own unit (10s and 20s stack separately).
+            self.assertEqual(rels, ["M_51_sub/10s", "M_51_sub/20s"])
+
+    def test_handles_subs_suffix(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "NGC_6946_subs" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual(
+                [str(u.relative_to(root)) for u in units], ["NGC_6946_subs/20s"]
+            )
+
+    def test_ignores_lights_without_fits(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_99_sub" / "lights").mkdir(parents=True)  # empty lights/
+            self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    def test_ignores_macos_resource_fork_only_lights(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_1_sub" / "lights", name="._Light_M_1.fit")
+            self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    def test_filter_matches_target_in_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_51_sub" / "20s" / "lights")
+            self._mkfits(root / "M_57_sub" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root, filter_name="M_51")
+            self.assertEqual(
+                [str(u.relative_to(root)) for u in units], ["M_51_sub/20s"]
+            )
+
+    def test_pointed_directly_at_exposure_folder(self):
+        # README workaround: point batch_stack at the <exp>s/ folder itself.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "lights")  # root IS the exposure unit
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual(units, [root])
+
+
+class FindTargetDirsTests(unittest.TestCase):
+    """sort_by_exptime / purge_siril_cruft target discovery includes both
+    _sub and _subs suffixes."""
+
+    def _make_tree(self, root: Path):
+        (root / "M_51_sub").mkdir()
+        (root / "NGC_6946_subs").mkdir()
+        (root / "not_a_target").mkdir()
+        (root / "loose_file.fit").write_bytes(b"x")
+
+    def test_sort_by_exptime_includes_sub_and_subs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_tree(root)
+            names = sorted(d.name for d in sort_by_exptime.find_target_dirs(root))
+            self.assertEqual(names, ["M_51_sub", "NGC_6946_subs"])
+
+    def test_purge_includes_sub_and_subs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_tree(root)
+            names = sorted(d.name for d in purge_siril_cruft.find_target_dirs(root))
+            self.assertEqual(names, ["M_51_sub", "NGC_6946_subs"])
 
 
 if __name__ == "__main__":
