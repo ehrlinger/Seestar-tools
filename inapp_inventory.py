@@ -18,7 +18,13 @@ Usage:
     python3 inapp_inventory.py /path/to/Seestar     # explicit archive path
     python3 inapp_inventory.py --all                # every stack version, not just best
     python3 inapp_inventory.py --csv                # CSV instead of a table
+    python3 inapp_inventory.py /path --write        # write to the vault + a local copy
+    python3 inapp_inventory.py /path --write DIR_OR_FILE   # explicit write location
     python3 inapp_inventory.py -h                   # this help
+
+--write resolves the destination like count_subs: --write PATH → SEESTAR_VAULT_INV
+(exported from seestar.conf) → built-in vault default, saving to
+'Astrophotography/In-App Stacks Inventory.md' plus a copy at the archive root.
 """
 
 import re
@@ -146,6 +152,37 @@ def render_markdown(rows: list) -> str:
     return "\n".join(out) + "\n"
 
 
+_STD_INAPP_REL = Path("Astrophotography") / "In-App Stacks Inventory.md"
+_DEFAULT_VAULT_DIR = Path(
+    "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault"
+).expanduser()
+
+
+def resolve_inapp_inventory_path(explicit: str | None = None) -> Path:
+    """
+    Resolve where to WRITE the in-app catalog, highest priority first:
+      1. ``--write PATH`` — a directory gets ``Astrophotography/In-App Stacks
+         Inventory.md`` appended; a file path is used as-is
+      2. ``SEESTAR_VAULT_INV`` (the vault root dir, exported from seestar.conf)
+      3. the built-in default vault
+    No existence check — the caller creates parent dirs. Pure but for ``os.environ``.
+    """
+    import os
+    if explicit:
+        p = Path(explicit).expanduser()
+        # A ".md" path is the file itself; anything else is treated as a vault dir
+        # (works even if it doesn't exist yet — the caller mkdirs the parent).
+        return p if p.suffix.lower() == ".md" else (p / _STD_INAPP_REL)
+    env = os.environ.get("SEESTAR_VAULT_INV", "").strip()
+    if env:
+        cand = Path(env).expanduser() / _STD_INAPP_REL
+        # Only trust the env vault if its folder actually exists — guards against a
+        # malformed value (e.g. backslash-escaped spaces) creating junk directories.
+        if cand.parent.is_dir():
+            return cand
+    return _DEFAULT_VAULT_DIR / _STD_INAPP_REL
+
+
 def render_csv(rows: list) -> str:
     import csv
     import io
@@ -168,13 +205,36 @@ def main() -> None:
     if not root.is_dir():
         sys.exit(f"ERROR: not a directory: {root}")
 
+    write = "--write" in flags or "--update-inventory" in flags
+    explicit = None
+    for i, a in enumerate(sys.argv):
+        if a == "--write" and i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("-"):
+            explicit = sys.argv[i + 1]
+
     stacks = find_inapp_stacks(root)
     rows = stacks if "--all" in flags else best_per_target(stacks)
     rows = sorted(rows, key=lambda r: r["target"])
     if not rows:
         print(f"No in-app Stacked_* files found under {root}")
         return
-    print(render_csv(rows) if "--csv" in flags else render_markdown(rows))
+
+    text = render_csv(rows) if "--csv" in flags else render_markdown(rows)
+    if not write:
+        print(text)
+        return
+
+    # --write: save the markdown to the vault inventory + a local copy on the NAS root.
+    vault = resolve_inapp_inventory_path(explicit)
+    local = root / "In-App Stacks Inventory.md"
+    md = render_markdown(rows)
+    for dest in (vault, local):
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(md, encoding="utf-8")
+            print(f"  saved -> {dest}")
+        except OSError as e:
+            print(f"  WARNING: could not write {dest}: {e}")
+    print(f"  ({len(rows)} target{'s' if len(rows) != 1 else ''} catalogued)")
 
 
 if __name__ == "__main__":

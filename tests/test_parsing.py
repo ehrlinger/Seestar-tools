@@ -1048,6 +1048,56 @@ class ExcludesTrashTests(unittest.TestCase):
             self.assertEqual(names, ["M_1_sub"])
 
 
+class ResolveInappInventoryPathTests(unittest.TestCase):
+    """inapp_inventory.resolve_inapp_inventory_path — where to WRITE the in-app
+    catalog: --write PATH > SEESTAR_VAULT_INV > built-in default (highest priority
+    wins; a dir gets the standard 'Astrophotography/In-App Stacks Inventory.md')."""
+
+    REL = Path("Astrophotography") / "In-App Stacks Inventory.md"
+
+    def test_explicit_file_used_as_is(self):
+        self.assertEqual(
+            inapp_inventory.resolve_inapp_inventory_path("/tmp/Foo.md"), Path("/tmp/Foo.md")
+        )
+
+    def test_explicit_dir_gets_standard_relpath(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                inapp_inventory.resolve_inapp_inventory_path(td), Path(td) / self.REL
+            )
+
+    def test_env_vault_dir_used_when_it_exists(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "Astrophotography").mkdir()   # a real vault folder
+            os.environ["SEESTAR_VAULT_INV"] = td
+            try:
+                self.assertEqual(
+                    inapp_inventory.resolve_inapp_inventory_path(), Path(td) / self.REL
+                )
+            finally:
+                del os.environ["SEESTAR_VAULT_INV"]
+
+    def test_malformed_env_falls_back_to_default(self):
+        # A backslash-escaped / non-existent env path must NOT be used as-is (it
+        # would create junk dirs); fall back to the built-in default vault.
+        os.environ["SEESTAR_VAULT_INV"] = "/no/such/vault\\ with\\ backslashes"
+        try:
+            p = inapp_inventory.resolve_inapp_inventory_path()
+            self.assertEqual(p, inapp_inventory._DEFAULT_VAULT_DIR / self.REL)
+        finally:
+            del os.environ["SEESTAR_VAULT_INV"]
+
+    def test_explicit_beats_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["SEESTAR_VAULT_INV"] = td
+            try:
+                self.assertEqual(
+                    inapp_inventory.resolve_inapp_inventory_path("/tmp/X.md"), Path("/tmp/X.md")
+                )
+            finally:
+                del os.environ["SEESTAR_VAULT_INV"]
+
+
 class ParseStackedNameTests(unittest.TestCase):
     """inapp_inventory.parse_stacked_name — parse a Seestar in-app stack filename
     Stacked_<subs>_<target>_<exp>s_<filter>_<YYYYMMDD-HHMMSS>[_thn].<ext>."""
