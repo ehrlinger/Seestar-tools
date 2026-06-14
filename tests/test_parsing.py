@@ -4,6 +4,7 @@ Run with:  python3 -m unittest discover -s tests -v
 """
 import contextlib
 import io
+import os
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import batch_stack
 import organize_subs
 import count_subs
+import purge_siril_cruft
 import rename_seestar_folders
 import sort_by_exptime
 
@@ -384,6 +386,117 @@ class ResolveInventoryPathTests(unittest.TestCase):
                     os.environ.pop("SEESTAR_VAULT_INV", None)
                 else:
                     os.environ["SEESTAR_VAULT_INV"] = old
+
+
+class FindStackUnitsTests(unittest.TestCase):
+    """batch_stack.find_stack_units — locate stackable units (dirs holding a
+    lights/ of raw FITS) under BOTH the legacy flat and canonical exp-sorted
+    layouts."""
+
+    def _mkfits(self, d: Path, name: str = "Light_M_51_20.0s_IRCUT_20260501.fit"):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"fits")
+
+    def test_legacy_flat_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_57_sub" / "lights")
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual([u.name for u in units], ["M_57_sub"])
+
+    def test_canonical_exposure_layout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_51_sub" / "10s" / "lights")
+            self._mkfits(root / "M_51_sub" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root)
+            # .as_posix() so the assertion is OS-agnostic (Windows uses \).
+            rels = sorted(u.relative_to(root).as_posix() for u in units)
+            # Each exposure folder is its own unit (10s and 20s stack separately).
+            self.assertEqual(rels, ["M_51_sub/10s", "M_51_sub/20s"])
+
+    def test_handles_subs_suffix(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "NGC_6946_subs" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual(
+                [u.relative_to(root).as_posix() for u in units], ["NGC_6946_subs/20s"]
+            )
+
+    def test_ignores_lights_without_fits(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_99_sub" / "lights").mkdir(parents=True)  # empty lights/
+            self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    def test_ignores_macos_resource_fork_only_lights(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_1_sub" / "lights", name="._Light_M_1.fit")
+            self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics")
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root bypasses perms")
+    def test_unreadable_lights_dir_is_skipped_not_fatal(self):
+        # A lights/ dir we can't list (permissions / transient NAS error) must be
+        # skipped, not crash the whole scan.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_good_sub" / "20s" / "lights")
+            bad = root / "M_bad_sub" / "lights"
+            self._mkfits(bad)
+            os.chmod(bad, 0o000)
+            try:
+                units = batch_stack.find_stack_units(root)
+                self.assertEqual(
+                    [u.relative_to(root).as_posix() for u in units], ["M_good_sub/20s"]
+                )
+            finally:
+                os.chmod(bad, 0o755)  # restore so TemporaryDirectory can clean up
+
+    def test_filter_matches_target_in_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_51_sub" / "20s" / "lights")
+            self._mkfits(root / "M_57_sub" / "20s" / "lights")
+            units = batch_stack.find_stack_units(root, filter_name="M_51")
+            self.assertEqual(
+                [u.relative_to(root).as_posix() for u in units], ["M_51_sub/20s"]
+            )
+
+    def test_pointed_directly_at_exposure_folder(self):
+        # README workaround: point batch_stack at the <exp>s/ folder itself.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "lights")  # root IS the exposure unit
+            units = batch_stack.find_stack_units(root)
+            self.assertEqual(units, [root])
+
+
+class FindTargetDirsTests(unittest.TestCase):
+    """sort_by_exptime / purge_siril_cruft target discovery includes both
+    _sub and _subs suffixes."""
+
+    def _make_tree(self, root: Path):
+        (root / "M_51_sub").mkdir()
+        (root / "NGC_6946_subs").mkdir()
+        (root / "not_a_target").mkdir()
+        (root / "loose_file.fit").write_bytes(b"x")
+
+    def test_sort_by_exptime_includes_sub_and_subs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_tree(root)
+            names = sorted(d.name for d in sort_by_exptime.find_target_dirs(root))
+            self.assertEqual(names, ["M_51_sub", "NGC_6946_subs"])
+
+    def test_purge_includes_sub_and_subs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._make_tree(root)
+            names = sorted(d.name for d in purge_siril_cruft.find_target_dirs(root))
+            self.assertEqual(names, ["M_51_sub", "NGC_6946_subs"])
 
 
 class MergeIntoExistingTests(unittest.TestCase):

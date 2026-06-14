@@ -113,6 +113,8 @@ Path resolution is **`--src`/`--dst` → `seestar.conf` → platform defaults**,
 
 Requires `siril-cli` on PATH. Skips folders that already have a current stack, restacks folders where new subs have been added.
 
+Works on both on-disk layouts: a flat `<target>_sub/lights/` and the canonical exposure-sorted `<target>_sub/<exp>s/lights/`. Each exposure folder is discovered and stacked **separately** (10 s alt-az and 20 s EQ subs never get mixed into one stack), whether you point it at the archive root, a single `<target>_sub`, or an individual `<target>_sub/<exp>s` folder.
+
 ```bash
 # Stack all pending folders
 python3 batch_stack.py /Volumes/YourNAS/Seestar/

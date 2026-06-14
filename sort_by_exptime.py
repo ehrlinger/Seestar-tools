@@ -145,6 +145,14 @@ def is_already_sorted(directory: pathlib.Path, root: pathlib.Path) -> bool:
     return any(EXPTIME_DIR_RE.match(part) for part in rel.parts)
 
 
+def find_target_dirs(root: pathlib.Path) -> list[pathlib.Path]:
+    """Top-level *_sub / *_subs directories under root (used by --all)."""
+    return sorted(
+        d for d in root.iterdir()
+        if d.is_dir() and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+    )
+
+
 def fits_dirs(root: pathlib.Path) -> list[pathlib.Path]:
     """
     Return every directory under *root* that contains FITS files directly,
@@ -284,9 +292,9 @@ def main() -> None:
         root = args.root.expanduser().resolve()
         if not root.is_dir():
             sys.exit(f"ERROR: not a directory: {root}")
-        targets = sorted(d for d in root.iterdir() if d.is_dir() and d.name.endswith("_sub"))
+        targets = find_target_dirs(root)
         if not targets:
-            sys.exit(f"No *_sub directories found under {root}")
+            sys.exit(f"No *_sub / *_subs directories found under {root}")
         print(f"Found {len(targets)} target folder(s) under {root}\n")
 
     for p in args.paths:

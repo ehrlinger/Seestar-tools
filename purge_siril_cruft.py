@@ -163,6 +163,14 @@ class Tally:
         return self.proc_bytes + self.copy_bytes + self.dbl_bytes
 
 
+def find_target_dirs(root: Path) -> list[Path]:
+    """Top-level *_sub / *_subs directories under root (default target set)."""
+    return sorted(
+        d for d in root.iterdir()
+        if d.is_dir() and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+    )
+
+
 def clean_target(target: Path, dry_run: bool) -> Tally:
     t = Tally()
     print(f"\n  {target.name}")
@@ -245,7 +253,7 @@ def main() -> None:
     )
     ap.add_argument("root", type=Path, help="Archive root (e.g. /Volumes/personal_folder/Astro/Seestar)")
     ap.add_argument("--target", action="append", default=[],
-                    help="Limit to one target folder (repeatable). Default: every *_sub under root.")
+                    help="Limit to one target folder (repeatable). Default: every *_sub / *_subs under root.")
     ap.add_argument("--apply", action="store_true",
                     help="Actually delete. Without this, runs as a dry-run.")
     ap.add_argument("--no-sort", action="store_true",
@@ -259,7 +267,7 @@ def main() -> None:
     if args.target:
         targets = [root / t for t in args.target]
     else:
-        targets = sorted(d for d in root.iterdir() if d.is_dir() and d.name.endswith("_sub"))
+        targets = find_target_dirs(root)
     targets = [t for t in targets if t.is_dir()]
     if not targets:
         sys.exit(f"No target folders found under {root}")
