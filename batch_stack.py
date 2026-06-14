@@ -2,8 +2,10 @@
 """
 batch_stack.py
 
-Batch-runs Siril's Seestar_Preprocessing script across all _sub/_subs
-folders that don't yet have a stacked result (or whose stack is stale).
+Batch-runs Siril's Seestar_Preprocessing script across all "stack units"
+that don't yet have a stacked result (or whose stack is stale). A stack unit
+is any folder that directly contains a lights/ of raw FITS — i.e. a flat
+<target>_sub/ or an exposure-sorted <target>_sub/<exp>s/ (see Layouts below).
 Assumes you are running from the NAS Seestar archive — path defaults to '.'.
 
 Usage:
@@ -148,7 +150,13 @@ def find_stack_units(root: Path, filter_name: str = "") -> list[Path]:
     for lights in root.rglob("lights"):
         if not lights.is_dir():
             continue
-        if any(is_raw_fits(f) for f in lights.iterdir()):
+        try:
+            has_raw = any(is_raw_fits(f) for f in lights.iterdir())
+        except OSError:
+            # Unreadable (permissions) or transient NAS error — skip this dir
+            # rather than aborting the whole batch.
+            continue
+        if has_raw:
             units.add(lights.parent)
 
     result = sorted(units)

@@ -294,7 +294,7 @@ def main() -> None:
             sys.exit(f"ERROR: not a directory: {root}")
         targets = find_target_dirs(root)
         if not targets:
-            sys.exit(f"No *_sub directories found under {root}")
+            sys.exit(f"No *_sub / *_subs directories found under {root}")
         print(f"Found {len(targets)} target folder(s) under {root}\n")
 
     for p in args.paths:

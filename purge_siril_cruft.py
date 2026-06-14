@@ -253,7 +253,7 @@ def main() -> None:
     )
     ap.add_argument("root", type=Path, help="Archive root (e.g. /Volumes/personal_folder/Astro/Seestar)")
     ap.add_argument("--target", action="append", default=[],
-                    help="Limit to one target folder (repeatable). Default: every *_sub under root.")
+                    help="Limit to one target folder (repeatable). Default: every *_sub / *_subs under root.")
     ap.add_argument("--apply", action="store_true",
                     help="Actually delete. Without this, runs as a dry-run.")
     ap.add_argument("--no-sort", action="store_true",

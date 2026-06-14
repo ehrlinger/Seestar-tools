@@ -2,6 +2,7 @@
 Characterization tests for the pure parsing/grouping functions.
 Run with:  python3 -m unittest discover -s tests -v
 """
+import os
 import sys
 import tempfile
 import unittest
@@ -432,6 +433,25 @@ class FindStackUnitsTests(unittest.TestCase):
             root = Path(td)
             self._mkfits(root / "M_1_sub" / "lights", name="._Light_M_1.fit")
             self.assertEqual(batch_stack.find_stack_units(root), [])
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission semantics")
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root bypasses perms")
+    def test_unreadable_lights_dir_is_skipped_not_fatal(self):
+        # A lights/ dir we can't list (permissions / transient NAS error) must be
+        # skipped, not crash the whole scan.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_good_sub" / "20s" / "lights")
+            bad = root / "M_bad_sub" / "lights"
+            self._mkfits(bad)
+            os.chmod(bad, 0o000)
+            try:
+                units = batch_stack.find_stack_units(root)
+                self.assertEqual(
+                    [u.relative_to(root).as_posix() for u in units], ["M_good_sub/20s"]
+                )
+            finally:
+                os.chmod(bad, 0o755)  # restore so TemporaryDirectory can clean up
 
     def test_filter_matches_target_in_path(self):
         with tempfile.TemporaryDirectory() as td:
