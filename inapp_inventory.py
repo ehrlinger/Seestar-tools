@@ -9,9 +9,10 @@ self-describing — no FITS headers, no astropy:
 
     Stacked_<subs>_<target>_<exp>s_<filter>_<YYYYMMDD-HHMMSS>[_thn].<ext>
 
-By default it lists the **best (most-subs) in-app stack per target** and writes a
-markdown table next to your sub inventory, so you have a caption-ready reference
-("NGC 6946 — 459×20s, 2h 33m") without digging through filenames.
+By default it **prints** a markdown table of the **best (most-subs) in-app stack
+per target** — a caption-ready reference ("NGC 6946 — 459×20s, 2h 33m") without
+digging through filenames. Pass ``--write`` to save it into your vault (next to
+the sub inventory) plus a copy at the archive root.
 
 Usage:
     python3 inapp_inventory.py                      # catalog ./ (best per target)
@@ -50,13 +51,14 @@ def parse_stacked_name(name: str) -> dict | None:
     m = _STACKED_RE.match(name)
     if not m:
         return None
-    subs, target, exp, filt, yyyy, mm, dd, _hms, thn, ext = m.groups()
+    subs, target, exp, filt, yyyy, mm, dd, hms, thn, ext = m.groups()
     return {
         "subs": int(subs),
         "target": target,
         "exp": float(exp),
         "filter": filt,
         "date": f"{yyyy}-{mm}-{dd}",
+        "datetime": f"{yyyy}{mm}{dd}-{hms}",   # full, lexically sortable timestamp
         "thumb": thn is not None,
         "ext": ext.lower(),
     }
@@ -64,14 +66,14 @@ def parse_stacked_name(name: str) -> dict | None:
 
 def best_per_target(stacks: list) -> list:
     """
-    Given parsed stacks (dicts with ``target``/``subs``/``date``), return one entry
-    per target: the stack with the most subs, ties broken by the most recent date.
-    Pure — no I/O.
+    Given parsed stacks (dicts with ``target``/``subs``/``datetime``), return one
+    entry per target: the stack with the most subs, ties broken by the latest full
+    timestamp (so same-subs-same-day stacks resolve deterministically). Pure — no I/O.
     """
     best: dict = {}
     for s in stacks:
         cur = best.get(s["target"])
-        if cur is None or (s["subs"], s["date"]) > (cur["subs"], cur["date"]):
+        if cur is None or (s["subs"], s["datetime"]) > (cur["subs"], cur["datetime"]):
             best[s["target"]] = s
     return [best[t] for t in sorted(best)]
 
@@ -108,7 +110,7 @@ def find_inapp_stacks(root: Path) -> list:
             stem = _STEM_RE.sub("", f.name)   # stack identity: drop _thn + extension
             s = by_stem.get(stem)
             if s is None:
-                s = {k: parsed[k] for k in ("subs", "target", "exp", "filter", "date")}
+                s = {k: parsed[k] for k in ("subs", "target", "exp", "filter", "date", "datetime")}
                 s.update(folder=d.name, has_fit=False, has_jpg=False)
                 by_stem[stem] = s
             if parsed["ext"] in ("fit", "fits"):

@@ -1111,6 +1111,7 @@ class ParseStackedNameTests(unittest.TestCase):
         self.assertEqual(r["exp"], 20.0)
         self.assertEqual(r["filter"], "IRCUT")
         self.assertEqual(r["date"], "2026-06-13")
+        self.assertEqual(r["datetime"], "20260613-051001")   # full sortable timestamp
         self.assertEqual(r["ext"], "fit")
         self.assertFalse(r["thumb"])
 
@@ -1162,33 +1163,35 @@ class FindInappStacksTests(unittest.TestCase):
             s = stacks[0]
             self.assertEqual(s["subs"], 459)
             self.assertEqual(s["target"], "NGC 6946")
+            self.assertEqual(s["datetime"], "20260613-051001")   # kept for tie-breaking
             self.assertTrue(s["has_fit"])
             self.assertTrue(s["has_jpg"])
 
 
 class BestPerTargetTests(unittest.TestCase):
     """inapp_inventory.best_per_target — one entry per target: the stack with the
-    most subs (ties broken by most-recent date)."""
+    most subs, ties broken by the latest full timestamp (deterministic)."""
 
     def test_keeps_highest_sub_count_per_target(self):
         stacks = [
-            {"subs": 138, "target": "M 51", "date": "2026-05-14"},
-            {"subs": 399, "target": "M 51", "date": "2026-05-16"},
-            {"subs": 459, "target": "NGC 6946", "date": "2026-06-13"},
+            {"subs": 138, "target": "M 51", "datetime": "20260514-230000"},
+            {"subs": 399, "target": "M 51", "datetime": "20260516-010000"},
+            {"subs": 459, "target": "NGC 6946", "datetime": "20260613-051001"},
         ]
         best = {b["target"]: b for b in inapp_inventory.best_per_target(stacks)}
         self.assertEqual(best["M 51"]["subs"], 399)
         self.assertEqual(best["NGC 6946"]["subs"], 459)
         self.assertEqual(len(best), 2)
 
-    def test_tie_break_prefers_latest_date(self):
+    def test_tie_break_prefers_latest_timestamp_same_day(self):
+        # same subs, same DATE, different time → must deterministically pick latest
         stacks = [
-            {"subs": 100, "target": "M 1", "date": "2026-05-01"},
-            {"subs": 100, "target": "M 1", "date": "2026-05-09"},
+            {"subs": 100, "target": "M 1", "datetime": "20260509-013000"},
+            {"subs": 100, "target": "M 1", "datetime": "20260509-224500"},
         ]
         best = inapp_inventory.best_per_target(stacks)
         self.assertEqual(len(best), 1)
-        self.assertEqual(best[0]["date"], "2026-05-09")
+        self.assertEqual(best[0]["datetime"], "20260509-224500")
 
 
 if __name__ == "__main__":
