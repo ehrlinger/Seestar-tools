@@ -407,7 +407,8 @@ class FindStackUnitsTests(unittest.TestCase):
             self._mkfits(root / "M_51_sub" / "10s" / "lights")
             self._mkfits(root / "M_51_sub" / "20s" / "lights")
             units = batch_stack.find_stack_units(root)
-            rels = sorted(str(u.relative_to(root)) for u in units)
+            # .as_posix() so the assertion is OS-agnostic (Windows uses \).
+            rels = sorted(u.relative_to(root).as_posix() for u in units)
             # Each exposure folder is its own unit (10s and 20s stack separately).
             self.assertEqual(rels, ["M_51_sub/10s", "M_51_sub/20s"])
 
@@ -417,7 +418,7 @@ class FindStackUnitsTests(unittest.TestCase):
             self._mkfits(root / "NGC_6946_subs" / "20s" / "lights")
             units = batch_stack.find_stack_units(root)
             self.assertEqual(
-                [str(u.relative_to(root)) for u in units], ["NGC_6946_subs/20s"]
+                [u.relative_to(root).as_posix() for u in units], ["NGC_6946_subs/20s"]
             )
 
     def test_ignores_lights_without_fits(self):
@@ -439,7 +440,7 @@ class FindStackUnitsTests(unittest.TestCase):
             self._mkfits(root / "M_57_sub" / "20s" / "lights")
             units = batch_stack.find_stack_units(root, filter_name="M_51")
             self.assertEqual(
-                [str(u.relative_to(root)) for u in units], ["M_51_sub/20s"]
+                [u.relative_to(root).as_posix() for u in units], ["M_51_sub/20s"]
             )
 
     def test_pointed_directly_at_exposure_folder(self):
