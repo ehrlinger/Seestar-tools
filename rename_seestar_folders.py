@@ -29,8 +29,6 @@ import shutil
 import sys
 from pathlib import Path
 
-FITS_EXTENSIONS = {".fit", ".fits", ".FIT", ".FITS"}
-
 
 def find_sub_folders(root: Path) -> list[Path]:
     return sorted(
@@ -44,6 +42,20 @@ def new_name(folder_name: str) -> str:
     return folder_name.strip().replace(" ", "_")
 
 
+def _safe_dest(dest: Path) -> Path:
+    """Return a non-clobbering path, appending _dupN before the suffix if needed.
+    Mirrors organize_subs.safe_dest so a genuine collision is preserved, never
+    overwritten."""
+    if not dest.exists():
+        return dest
+    n = 1
+    while True:
+        candidate = dest.with_name(f"{dest.stem}_dup{n}{dest.suffix}")
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
 def merge_into_existing(donor: Path, dest: Path, dry_run: bool) -> dict:
     """
     Fold a space-named *donor* folder into an already-canonical *dest* folder.
@@ -53,18 +65,28 @@ def merge_into_existing(donor: Path, dest: Path, dry_run: bool) -> dict:
     later steps never consolidate), move every file from the donor into the
     matching relative location under dest, then remove the emptied donor.
 
-    Dedupe is by filename: if a file's basename already exists *anywhere* under
-    dest (e.g. it was sorted into 20s/lights/ on a previous run), the donor
-    copy is a redundant re-delivery and is dropped instead of moved. This keeps
-    the canonical sorted subtree untouched and makes the operation idempotent.
+    Dedupe is by filename AND size: a donor file is dropped only when a file of
+    the same basename *and* identical size already exists anywhere under dest
+    (e.g. the same sub was sorted into 20s/lights/ on a previous run) — Seestar
+    filenames embed a second-resolution timestamp, so a name+size match is the
+    same frame re-delivered. A same-name-but-different-size file is NOT a
+    duplicate: it is moved under a collision-safe _dupN name instead of being
+    unlinked, so no real data is ever silently dropped. This keeps the canonical
+    sorted subtree untouched and makes re-runs idempotent.
 
     Raw subs left at the donor root land at the dest root, where the subsequent
     organize → exposure-sort steps file them into <exp>s/lights/.
 
     Returns a summary dict: {"moved": int, "deduped": int, "donor_removed": bool}.
     """
-    # Basenames already archived under dest — the dedupe key.
-    existing_names = {p.name for p in dest.rglob("*") if p.is_file()}
+    # Map basename -> set of sizes already archived under dest (the dedupe key).
+    existing: dict[str, set[int]] = {}
+    for p in dest.rglob("*"):
+        if p.is_file():
+            try:
+                existing.setdefault(p.name, set()).add(p.stat().st_size)
+            except OSError:
+                continue
 
     moved = 0
     deduped = 0
@@ -72,19 +94,25 @@ def merge_into_existing(donor: Path, dest: Path, dry_run: bool) -> dict:
 
     for src in donor_files:
         rel = src.relative_to(donor)
-        if src.name in existing_names:
+        try:
+            size = src.stat().st_size
+        except OSError:
+            size = -1
+
+        if size in existing.get(src.name, set()):
             print(f"    🗑  DEDUPE  {rel}  (already in {dest.name}/)")
             if not dry_run:
                 src.unlink()
             deduped += 1
         else:
-            target = dest / rel
-            print(f"    ➡️  MERGE   {rel} → {dest.name}/{rel}")
+            target = _safe_dest(dest / rel)
+            label = rel if target.name == src.name else f"{rel} → {target.name}"
+            print(f"    ➡️  MERGE   {label} → {dest.name}/")
             if not dry_run:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(src), str(target))
-            # Reserve the name so two donor files can't collide with each other.
-            existing_names.add(src.name)
+            # Reserve this name+size so identical later donor files dedupe too.
+            existing.setdefault(src.name, set()).add(size)
             moved += 1
 
     donor_removed = False

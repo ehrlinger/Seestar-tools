@@ -438,6 +438,49 @@ class MergeIntoExistingTests(unittest.TestCase):
             self.assertTrue(already.exists())
             self.assertFalse((dest / "Light_0001.fit").exists())
 
+    def test_same_name_different_size_is_kept_not_deleted(self):
+        # Hardening: dedupe only when name AND size match. A same-name file with
+        # a DIFFERENT size is not the same frame, so it must be preserved, never
+        # silently unlinked. (Existing copy lives elsewhere in the tree, so the
+        # donor copy lands at the dest root un-renamed — no path collision.)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            sorted_dir = dest / "20s" / "lights"
+            sorted_dir.mkdir(parents=True)
+            (sorted_dir / "Light_0001.fit").write_bytes(b"AAAA")          # size 4
+            donor.mkdir()
+            (donor / "Light_0001.fit").write_bytes(b"BBBBBBBB")           # size 8
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertEqual(res["deduped"], 0)
+            self.assertEqual(res["moved"], 1)
+            self.assertFalse(donor.exists())
+            # Original sorted sub untouched; donor copy preserved at dest root.
+            self.assertEqual((sorted_dir / "Light_0001.fit").read_bytes(), b"AAAA")
+            self.assertEqual((dest / "Light_0001.fit").read_bytes(), b"BBBBBBBB")
+
+    def test_true_path_collision_renamed_to_dup_not_overwritten(self):
+        # Same name + different size at the SAME relative path → collision-safe
+        # _dupN rename, original preserved (never overwritten or unlinked).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            dest.mkdir()
+            (dest / "Light_0002.fit").write_bytes(b"AAAA")               # size 4
+            donor.mkdir()
+            (donor / "Light_0002.fit").write_bytes(b"BBBBBBBB")          # size 8
+
+            res = self._merge(donor, dest, dry_run=False)
+
+            self.assertEqual(res["deduped"], 0)
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual((dest / "Light_0002.fit").read_bytes(), b"AAAA")
+            self.assertEqual((dest / "Light_0002_dup1.fit").read_bytes(), b"BBBBBBBB")
+
     def test_preserves_donor_subtree_structure(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
