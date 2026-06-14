@@ -29,11 +29,15 @@ import shutil
 import sys
 from pathlib import Path
 
+from seestar_common import is_in_excluded
+
 
 def find_sub_folders(root: Path) -> list[Path]:
     return sorted(
         p for p in root.rglob("*")
-        if p.is_dir() and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        if p.is_dir()
+        and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+        and not is_in_excluded(p, root)
     )
 
 
