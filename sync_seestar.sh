@@ -204,7 +204,7 @@ fi
 # Step 1: Rsync FITS + in-app stack JPGs (exclude per-sub JPG previews)
 # ─────────────────────────────────────────────────────────
 echo "══════════════════════════════════════════════════"
-echo "  STEP 1 — Sync FITS files to NAS (skip JPGs)"
+echo "  STEP 1 — Sync FITS + in-app stack JPGs to NAS (skip per-sub JPGs)"
 echo "══════════════════════════════════════════════════"
 echo ""
 
