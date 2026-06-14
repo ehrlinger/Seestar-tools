@@ -218,11 +218,12 @@ def _exp_label_seconds(label: str) -> float:
 
 def gather_lights(target_sub: pathlib.Path) -> dict:
     """
-    Collect every raw light frame under *target_sub*, mapped to its mount mode
-    (``"altaz"``/``"eq"``) or ``None`` when the exposure couldn't be read. Looks
-    only at light-bearing folders — the flat ``lights/``, a canonical mode folder
-    ``altaz/lights/`` or ``eq/lights/``, and a legacy per-exposure ``<exp>s/lights/``
-    — so darks/, flats/, and Siril working dirs are never touched. Mode comes from
+    Collect the raw light frames from *target_sub*'s light-bearing folders only —
+    the flat ``lights/``, a canonical mode folder ``altaz/lights/`` or
+    ``eq/lights/``, and a legacy per-exposure ``<exp>s/lights/`` — mapping each to
+    its mount mode (``"altaz"``/``"eq"``) or ``None`` when the exposure couldn't be
+    read. This does NOT walk the whole tree: darks/, flats/, deeper nesting, and
+    Siril working dirs are never touched. Mode comes from
     the folder name where it already encodes it (``altaz/``/``eq/`` directly, an
     ``<exp>s/`` label via :func:`mount_mode`); frames loose in the flat ``lights/``
     have their exposure read from the FITS header and mapped to a mode.
@@ -315,28 +316,32 @@ def normalize_target(target_sub: pathlib.Path, dry_run: bool) -> dict:
         else:
             shape = f"split ({' + '.join(known)})"
         tag = "[dry-run] " if dry_run else ""
-        print(f"  {target_sub.name}: {len(modes)} light(s) → {shape}; {tag}{len(moves)} to move")
+        print(f"  {target_sub.name}: {len(modes)} light(s) -> {shape}; {tag}{len(moves)} to move")
 
     # Which empty lights/ scaffolds the moves will leave behind — computed from
     # the post-move layout so the dry-run report matches a real run exactly.
     removals = _plan_dir_removals(target_sub, modes, moves)
 
+    # Classify every planned move the same way in dry-run and for real: a frame
+    # whose destination already exists is *skipped* (never overwritten), so the
+    # returned counts and the dry-run preview match an actual run.
     moved = skipped = 0
     for src, dest in sorted(moves.items()):
+        if dest.exists():
+            skipped += 1
+            continue
         if not dry_run:
-            if dest.exists():
-                skipped += 1
-                continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(src), str(dest))
         moved += 1
 
     if unreadable:
-        print(f"    ⚠  {len(unreadable)} unreadable file(s) left in place:")
+        # ASCII-only so a real run can't UnicodeEncodeError on a Windows console.
+        print(f"    WARNING: {len(unreadable)} unreadable file(s) left in place:")
         for p in unreadable[:5]:
             print(f"       {p.name}")
         if len(unreadable) > 5:
-            print(f"       … and {len(unreadable) - 5} more")
+            print(f"       ... and {len(unreadable) - 5} more")
 
     verb = "would remove" if dry_run else "removed"
     for d in removals:

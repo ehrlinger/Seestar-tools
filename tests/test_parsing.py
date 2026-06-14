@@ -580,6 +580,18 @@ class NormalizeTargetTests(unittest.TestCase):
             self.assertTrue((t / "altaz" / "lights" / "alt.fit").exists())
             self.assertTrue((t / "eq" / "lights" / "eq.fit").exists())
 
+    def test_dry_run_counts_existing_destination_as_skipped(self):
+        # A frame whose destination already exists must count as *skipped*, not
+        # moved — and the dry-run summary must agree with a real run.
+        with tempfile.TemporaryDirectory() as td:
+            t = Path(td) / "M_13_sub"
+            self._fits(t / "30s" / "lights", "Light_30.0s_a.fit")   # → lights/…
+            self._fits(t / "lights", "Light_30.0s_a.fit")           # …already there
+            with self._exptime_from_name():
+                summary = self._norm(t, dry_run=True)
+            self.assertEqual(summary["moved"], 0)
+            self.assertEqual(summary["skipped"], 1)
+
     def test_idempotent_when_already_flat_single(self):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td) / "M_13_sub"
