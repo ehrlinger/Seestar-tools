@@ -20,9 +20,12 @@ def is_in_excluded(path: Path, root: Path) -> bool:
     e.g. ``<root>/_trash/strays/M 51_sub`` or ``<root>/scripts/...``.
 
     Pure function — no filesystem access. Paths not under root are not excluded.
+    Matching is case-insensitive so that ``Scripts/`` or ``_Trash/`` are caught
+    on case-insensitive filesystems (macOS, Windows), consistent with the other
+    directory-name checks in this repo.
     """
     try:
         rel = path.relative_to(root)
     except ValueError:
         return False
-    return bool(EXCLUDED_DIR_NAMES.intersection(rel.parts))
+    return any(part.lower() in EXCLUDED_DIR_NAMES for part in rel.parts)

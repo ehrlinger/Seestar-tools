@@ -647,6 +647,12 @@ class IsInExcludedTests(unittest.TestCase):
     def test_path_outside_root_not_excluded(self):
         self.assertFalse(seestar_common.is_in_excluded(Path("/y/_trash/a"), Path("/x")))
 
+    def test_excluded_match_is_case_insensitive(self):
+        # Case-insensitive filesystems (macOS/Windows) may create Scripts/, _Trash/.
+        root = Path("/x")
+        self.assertTrue(seestar_common.is_in_excluded(root / "Scripts" / "a", root))
+        self.assertTrue(seestar_common.is_in_excluded(root / "_Trash" / "strays" / "M 1_sub", root))
+
 
 class ExcludesTrashTests(unittest.TestCase):
     """All recursive target-discovery scanners skip _trash/ (and scripts/)."""
