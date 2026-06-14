@@ -20,6 +20,7 @@ import organize_subs
 import count_subs
 import purge_siril_cruft
 import rename_seestar_folders
+import seestar_common
 import sort_by_exptime
 
 
@@ -913,6 +914,81 @@ class MergeIntoExistingTests(unittest.TestCase):
             # ...but the report shows what WOULD happen.
             self.assertEqual(res["moved"], 1)
             self.assertEqual(res["deduped"], 0)
+
+
+class IsInExcludedTests(unittest.TestCase):
+    """seestar_common.is_in_excluded — pure path predicate for _trash / scripts."""
+
+    def test_top_level_target_not_excluded(self):
+        root = Path("/x")
+        self.assertFalse(seestar_common.is_in_excluded(root / "M_51_sub", root))
+
+    def test_under_trash_is_excluded(self):
+        root = Path("/x")
+        self.assertTrue(
+            seestar_common.is_in_excluded(root / "_trash" / "strays" / "M 51_sub", root)
+        )
+
+    def test_under_scripts_is_excluded(self):
+        root = Path("/x")
+        self.assertTrue(seestar_common.is_in_excluded(root / "scripts" / "M_1_sub", root))
+
+    def test_path_outside_root_not_excluded(self):
+        self.assertFalse(seestar_common.is_in_excluded(Path("/y/_trash/a"), Path("/x")))
+
+    def test_excluded_match_is_case_insensitive(self):
+        # Case-insensitive filesystems (macOS/Windows) may create Scripts/, _Trash/.
+        root = Path("/x")
+        self.assertTrue(seestar_common.is_in_excluded(root / "Scripts" / "a", root))
+        self.assertTrue(seestar_common.is_in_excluded(root / "_Trash" / "strays" / "M 1_sub", root))
+
+
+class ExcludesTrashTests(unittest.TestCase):
+    """All recursive target-discovery scanners skip _trash/ (and scripts/)."""
+
+    def _mkfits(self, d: Path, name="Light_M_1_20.0s_IRCUT_20260501.fit"):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"fits")
+
+    def test_rename_find_sub_folders_skips_trash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M 51_sub").mkdir()                      # real, top level
+            (root / "_trash" / "strays" / "M 57_sub").mkdir(parents=True)
+            names = [p.name for p in rename_seestar_folders.find_sub_folders(root)]
+            self.assertEqual(names, ["M 51_sub"])
+
+    def test_count_find_sub_folders_skips_trash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_51_sub").mkdir()
+            (root / "_trash" / "M_57_sub").mkdir(parents=True)
+            names = [p.name for p in count_subs.find_sub_folders(root)]
+            self.assertEqual(names, ["M_51_sub"])
+
+    def test_organize_find_sub_folders_skips_trash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_51_sub").mkdir()
+            (root / "_trash" / "M_57_sub").mkdir(parents=True)
+            names = [p.name for p in organize_subs.find_sub_folders(root)]
+            self.assertEqual(names, ["M_51_sub"])
+
+    def test_batch_stack_find_stack_units_skips_trash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mkfits(root / "M_1_sub" / "lights")
+            self._mkfits(root / "_trash" / "M_2_sub" / "lights")
+            units = [u.relative_to(root).as_posix() for u in batch_stack.find_stack_units(root)]
+            self.assertEqual(units, ["M_1_sub"])
+
+    def test_sort_find_target_dirs_skips_trash(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "M_1_sub").mkdir()
+            (root / "_trash" / "M_2_sub").mkdir(parents=True)
+            names = [d.name for d in sort_by_exptime.find_target_dirs(root)]
+            self.assertEqual(names, ["M_1_sub"])
 
 
 if __name__ == "__main__":

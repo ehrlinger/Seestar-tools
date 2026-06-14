@@ -70,6 +70,8 @@ import shutil
 import sys
 from typing import Optional
 
+from seestar_common import is_in_excluded
+
 # ── dependencies ─────────────────────────────────────────────────────────────
 # astropy is imported lazily (see _fits_module) so this module can be imported —
 # and its pure helpers unit-tested — without astropy installed. Only the actual
@@ -199,10 +201,13 @@ def plan_layout(
 
 
 def find_target_dirs(root: pathlib.Path) -> list[pathlib.Path]:
-    """Top-level *_sub / *_subs directories under root (used by --all)."""
+    """Top-level *_sub / *_subs directories under root (used by --all), skipping
+    anything inside an excluded tree (_trash/, scripts/)."""
     return sorted(
         d for d in root.iterdir()
-        if d.is_dir() and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+        if d.is_dir()
+        and (d.name.endswith("_sub") or d.name.endswith("_subs"))
+        and not is_in_excluded(d, root)
     )
 
 

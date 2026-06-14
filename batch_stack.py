@@ -47,6 +47,8 @@ import threading
 import subprocess
 from pathlib import Path
 
+from seestar_common import is_in_excluded
+
 SIRIL_CLI     = "siril-cli"
 SCRIPT_NAME   = "Seestar_Preprocessing"
 
@@ -160,6 +162,8 @@ def find_stack_units(root: Path, filter_name: str = "") -> list[Path]:
     for lights in root.rglob("lights"):
         if not lights.is_dir():
             continue
+        if is_in_excluded(lights, root):
+            continue                              # _trash/, scripts/, etc.
         try:
             has_raw = any(is_raw_fits(f) for f in lights.iterdir())
         except OSError:
