@@ -2,6 +2,8 @@
 Characterization tests for the pure parsing/grouping functions.
 Run with:  python3 -m unittest discover -s tests -v
 """
+import contextlib
+import io
 import sys
 import tempfile
 import unittest
@@ -394,6 +396,13 @@ class MergeIntoExistingTests(unittest.TestCase):
         f.write_bytes(b"fits")
         return f
 
+    def _merge(self, donor, dest, dry_run):
+        # Capture stdout: merge_into_existing prints emoji progress, which
+        # crashes on a cp1252 console (Windows CI). The test asserts on
+        # filesystem state + return value, not console output.
+        with contextlib.redirect_stdout(io.StringIO()):
+            return rename_seestar_folders.merge_into_existing(donor, dest, dry_run=dry_run)
+
     def test_moves_new_donor_root_fits_into_existing_dest(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -404,7 +413,7 @@ class MergeIntoExistingTests(unittest.TestCase):
             # New incremental sync dropped a raw sub at the donor root.
             self._mkfits(donor, "Light_0003.fit")
 
-            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+            res = self._merge(donor, dest, dry_run=False)
 
             self.assertTrue((dest / "Light_0003.fit").exists())
             self.assertFalse(donor.exists())
@@ -420,7 +429,7 @@ class MergeIntoExistingTests(unittest.TestCase):
             # Donor re-delivers a sub that already lives in the sorted tree.
             self._mkfits(donor, "Light_0001.fit")
 
-            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+            res = self._merge(donor, dest, dry_run=False)
 
             self.assertEqual(res["moved"], 0)
             self.assertEqual(res["deduped"], 1)
@@ -437,7 +446,7 @@ class MergeIntoExistingTests(unittest.TestCase):
             dest.mkdir()
             self._mkfits(donor / "lights", "Light_0009.fit")
 
-            rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+            self._merge(donor, dest, dry_run=False)
 
             self.assertTrue((dest / "lights" / "Light_0009.fit").exists())
             self.assertFalse(donor.exists())
@@ -450,7 +459,7 @@ class MergeIntoExistingTests(unittest.TestCase):
             self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
             self._mkfits(donor, "Light_0003.fit")
 
-            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=True)
+            res = self._merge(donor, dest, dry_run=True)
 
             # Nothing on disk changed...
             self.assertTrue(donor.exists())
