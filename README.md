@@ -113,7 +113,7 @@ Path resolution is **`--src`/`--dst` → `seestar.conf` → platform defaults**,
 
 Requires `siril-cli` on PATH. Skips folders that already have a current stack, restacks folders where new subs have been added.
 
-Works on both on-disk layouts: a flat `<target>_sub/lights/` and the canonical exposure-sorted `<target>_sub/<exp>s/lights/`. Each exposure folder is discovered and stacked **separately** (10 s alt-az and 20 s EQ subs never get mixed into one stack), whether you point it at the archive root, a single `<target>_sub`, or an individual `<target>_sub/<exp>s` folder.
+Works on every on-disk shape: a flat `<target>_sub/lights/` (single mount mode) and a mode-split `<target>_sub/altaz/lights/` + `eq/lights/`. Each `lights/` of raw FITS is discovered as its own stack unit and stacked **separately**, so alt-az and EQ subs never get mixed into one stack — whether you point it at the archive root, a single `<target>_sub`, or an individual `altaz/` / `eq/` folder. (It also still recognises the legacy per-exposure `<target>_sub/<exp>s/lights/` layout.)
 
 ```bash
 # Stack all pending folders
@@ -127,6 +127,14 @@ python3 batch_stack.py /Volumes/YourNAS/Seestar/ "M 51"
 ```
 
 **NAS note:** Run scripts from local disk (this repo or your vault), passing the NAS path as an argument. macOS kills Python when the script file itself lives on a network volume.
+
+Subs are grouped by **mount mode**, not raw exposure: a Seestar shoots ~10 s in alt-az and 20 s+ in EQ, and those must stack separately (field rotation / quality), while different lengths *within* a mode (20 s + 30 s EQ) belong in one deeper stack. So a single-mode target stays **flat** (`<target>_sub/lights/`) and a both-modes target is **split** (`<target>_sub/altaz/lights/` + `eq/lights/`).
+
+**Running Siril by hand?** Point Siril's working directory at the folder that directly contains `lights/`, because `Seestar_Preprocessing.ssf` opens with `cd lights`:
+- **Single-mode target** → it stays **flat**, so point at the `<target>_sub` root (e.g. `M_57_sub`, all EQ) and `cd lights` finds every sub.
+- **Both-modes target** → it's **split** by mode, so point at `<target>_sub/altaz` or `<target>_sub/eq` (e.g. `M_63_sub/eq`).
+
+`batch_stack.py` resolves this for you automatically either way, so it only matters for manual GUI / `siril-cli` runs.
 
 ## Individual scripts
 

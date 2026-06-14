@@ -5,7 +5,8 @@
 #   Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
 #   Step 2  — rename _sub/_subs folders (remove spaces)
 #   Step 3  — organize: move Light_*.fits into lights/ subdirs
-#   Step 3b — sort subs by exposure into <exptime>s/lights/ (Siril-ready)
+#   Step 3b — normalise by mount mode: flat lights/ for a single mode,
+#             altaz/lights/ + eq/lights/ when both are present (Siril-ready)
 #   Step 4  — count subs + update AstroImages Inventory.md (vault + local copy)
 #
 # Usage:
@@ -51,7 +52,8 @@ sync_seestar.sh — full Seestar sync pipeline
   Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
   Step 2  — rename _sub/_subs folders (remove spaces)
   Step 3  — organize: move Light_*.fits into lights/ subdirs
-  Step 3b — sort subs by exposure into <exptime>s/lights/ (Siril-ready)
+  Step 3b — normalise by mount mode (flat lights/ if one mode,
+            altaz/lights/ + eq/lights/ if both) — Siril-ready
   Step 4  — count subs + update AstroImages Inventory.md
 
 Usage:
@@ -263,7 +265,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────
-# Step 3b: Sort subs by exposure into <exptime>s/lights/
+# Step 3b: Normalise by mount mode (flat lights/, or altaz/lights/ + eq/lights/)
 # ─────────────────────────────────────────────────────────
 if [[ -f "$SORT" ]]; then
   echo ""

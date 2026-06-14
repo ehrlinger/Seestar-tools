@@ -177,8 +177,13 @@ def clean_sub_folder(sub_dir: Path, dry_run: bool) -> dict:
                 jpg.unlink()
             summary["jpgs_deleted"] += 1
 
-    # 2. Create lights/ darks/ flats/ if missing
+    # 2. Create darks/ flats/ if missing. lights/ is created LAZILY in step 3 —
+    #    only when there is actually a raw FITS to move into it — so we never
+    #    leave an empty top-level lights/ scaffold beside an already-sorted
+    #    <exp>s/lights/ tree, which would trap a hand-run Siril `cd lights`.
     for subdir_name in SIRIL_SUBDIRS:
+        if subdir_name == "lights":
+            continue
         target = sub_dir / subdir_name
         if not target.exists():
             print(f"  📁 CREATE  {target.relative_to(sub_dir.parent)}/")
@@ -186,7 +191,7 @@ def clean_sub_folder(sub_dir: Path, dry_run: bool) -> dict:
                 target.mkdir(parents=True, exist_ok=True)
             summary["dirs_created"].append(subdir_name)
 
-    # 3. Move raw FITS from root into lights/
+    # 3. Move raw FITS from root into lights/ (created on first use)
     lights_dir = sub_dir / "lights"
     existing = collect_lights_fits(sub_dir)
     if existing:
@@ -210,6 +215,7 @@ def clean_sub_folder(sub_dir: Path, dry_run: bool) -> dict:
                 else:
                     print(f"  ➡️  MOVE    {fits_file.name} → lights/")
                     if not dry_run:
+                        lights_dir.mkdir(parents=True, exist_ok=True)
                         shutil.move(str(fits_file), str(dest))
                     summary["fits_moved"] += 1
 
