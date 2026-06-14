@@ -2,7 +2,7 @@
 # sync_seestar.sh
 #
 # Full Seestar sync pipeline (run from anywhere):
-#   Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
+#   Step 1  — rsync FITS + in-app stack JPGs from Seestar EMMC → NAS (skips per-sub JPGs)
 #   Step 2  — rename _sub/_subs folders (remove spaces)
 #   Step 3  — organize: move Light_*.fits into lights/ subdirs
 #   Step 3b — normalise by mount mode: flat lights/ for a single mode,
@@ -49,7 +49,7 @@ print_help() {
   cat <<'EOF'
 sync_seestar.sh — full Seestar sync pipeline
 
-  Step 1  — rsync FITS files from Seestar EMMC → NAS (skips JPGs)
+  Step 1  — rsync FITS + in-app stack JPGs from Seestar EMMC → NAS (skips per-sub JPGs)
   Step 2  — rename _sub/_subs folders (remove spaces)
   Step 3  — organize: move Light_*.fits into lights/ subdirs
   Step 3b — normalise by mount mode (flat lights/ if one mode,
@@ -201,18 +201,23 @@ if [[ $DRY_RUN -eq 0 && $ASSUME_YES -eq 0 ]]; then
 fi
 
 # ─────────────────────────────────────────────────────────
-# Step 1: Rsync FITS only (exclude all JPGs)
+# Step 1: Rsync FITS + in-app stack JPGs (exclude per-sub JPG previews)
 # ─────────────────────────────────────────────────────────
 echo "══════════════════════════════════════════════════"
 echo "  STEP 1 — Sync FITS files to NAS (skip JPGs)"
 echo "══════════════════════════════════════════════════"
 echo ""
 
+# Skip the per-sub JPG previews (Light_*.jpg / *_thn.jpg inside *_sub/ folders —
+# thousands of them, not wanted), but KEEP the Seestar in-app stack previews
+# (Stacked_*.jpg in the <target>/ folders). The in-app JPG filename encodes its
+# provenance — Stacked_<N>_<target>_<exp>s_… → sub count + exposure — so keeping
+# it preserves how the image was made. (.fit subs are always synced.)
 rsync "${RSYNC_FLAGS[@]}" \
-  --exclude="*.jpg"   \
-  --exclude="*.jpeg"  \
-  --exclude="*.JPG"   \
-  --exclude="*.JPEG"  \
+  --exclude="*_sub/**.jpg"   --exclude="*_subs/**.jpg"   \
+  --exclude="*_sub/**.jpeg"  --exclude="*_subs/**.jpeg"  \
+  --exclude="*_sub/**.JPG"   --exclude="*_subs/**.JPG"   \
+  --exclude="*_sub/**.JPEG"  --exclude="*_subs/**.JPEG"  \
   --exclude=".DS_Store" \
   --exclude="._*"     \
   "$SRC" "$DST"
