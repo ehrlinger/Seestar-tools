@@ -22,6 +22,7 @@ import purge_siril_cruft
 import rename_seestar_folders
 import seestar_common
 import sort_by_exptime
+import inapp_inventory
 
 
 class CanonicalTargetNameTests(unittest.TestCase):
@@ -1045,6 +1046,152 @@ class ExcludesTrashTests(unittest.TestCase):
             (root / "_trash" / "M_2_sub").mkdir(parents=True)
             names = [d.name for d in sort_by_exptime.find_target_dirs(root)]
             self.assertEqual(names, ["M_1_sub"])
+
+
+class ResolveInappInventoryPathTests(unittest.TestCase):
+    """inapp_inventory.resolve_inapp_inventory_path — where to WRITE the in-app
+    catalog: --write PATH > SEESTAR_VAULT_INV > built-in default (highest priority
+    wins; a dir gets the standard 'Astrophotography/In-App Stacks Inventory.md')."""
+
+    REL = Path("Astrophotography") / "In-App Stacks Inventory.md"
+
+    def test_explicit_file_used_as_is(self):
+        self.assertEqual(
+            inapp_inventory.resolve_inapp_inventory_path("/tmp/Foo.md"), Path("/tmp/Foo.md")
+        )
+
+    def test_explicit_dir_gets_standard_relpath(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(
+                inapp_inventory.resolve_inapp_inventory_path(td), Path(td) / self.REL
+            )
+
+    def test_env_vault_dir_used_when_it_exists(self):
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "Astrophotography").mkdir()   # a real vault folder
+            os.environ["SEESTAR_VAULT_INV"] = td
+            try:
+                self.assertEqual(
+                    inapp_inventory.resolve_inapp_inventory_path(), Path(td) / self.REL
+                )
+            finally:
+                del os.environ["SEESTAR_VAULT_INV"]
+
+    def test_malformed_env_falls_back_to_default(self):
+        # A backslash-escaped / non-existent env path must NOT be used as-is (it
+        # would create junk dirs); fall back to the built-in default vault.
+        os.environ["SEESTAR_VAULT_INV"] = "/no/such/vault\\ with\\ backslashes"
+        try:
+            p = inapp_inventory.resolve_inapp_inventory_path()
+            self.assertEqual(p, inapp_inventory._DEFAULT_VAULT_DIR / self.REL)
+        finally:
+            del os.environ["SEESTAR_VAULT_INV"]
+
+    def test_explicit_beats_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.environ["SEESTAR_VAULT_INV"] = td
+            try:
+                self.assertEqual(
+                    inapp_inventory.resolve_inapp_inventory_path("/tmp/X.md"), Path("/tmp/X.md")
+                )
+            finally:
+                del os.environ["SEESTAR_VAULT_INV"]
+
+
+class ParseStackedNameTests(unittest.TestCase):
+    """inapp_inventory.parse_stacked_name — parse a Seestar in-app stack filename
+    Stacked_<subs>_<target>_<exp>s_<filter>_<YYYYMMDD-HHMMSS>[_thn].<ext>."""
+
+    def test_parses_standard_in_app_stack(self):
+        r = inapp_inventory.parse_stacked_name(
+            "Stacked_459_NGC 6946_20.0s_IRCUT_20260613-051001.fit"
+        )
+        self.assertEqual(r["subs"], 459)
+        self.assertEqual(r["target"], "NGC 6946")
+        self.assertEqual(r["exp"], 20.0)
+        self.assertEqual(r["filter"], "IRCUT")
+        self.assertEqual(r["date"], "2026-06-13")
+        self.assertEqual(r["datetime"], "20260613-051001")   # full sortable timestamp
+        self.assertEqual(r["ext"], "fit")
+        self.assertFalse(r["thumb"])
+
+    def test_parses_lp_filter_single_digit_subs_jpg(self):
+        r = inapp_inventory.parse_stacked_name("Stacked_9_M 63_20.0s_LP_20260607-215647.jpg")
+        self.assertEqual(r["subs"], 9)
+        self.assertEqual(r["target"], "M 63")
+        self.assertEqual(r["filter"], "LP")
+        self.assertEqual(r["ext"], "jpg")
+
+    def test_thumbnail_suffix_flagged(self):
+        r = inapp_inventory.parse_stacked_name(
+            "Stacked_2_M 51_10.0s_IRCUT_20260514-220442_thn.jpg"
+        )
+        self.assertIsNotNone(r)
+        self.assertTrue(r["thumb"])
+        self.assertEqual(r["subs"], 2)
+        self.assertEqual(r["target"], "M 51")
+
+    def test_non_stacked_names_return_none(self):
+        # raw sub, and a Siril stack master — neither is a Seestar in-app stack
+        self.assertIsNone(
+            inapp_inventory.parse_stacked_name("Light_M_51_10.0s_IRCUT_20260509-013344.fit")
+        )
+        self.assertIsNone(
+            inapp_inventory.parse_stacked_name("M_51_399x20sec_T25degC_2026-05-16.fit")
+        )
+
+
+class FindInappStacksTests(unittest.TestCase):
+    """inapp_inventory.find_inapp_stacks — scan <target>/ folders, group a stack's
+    .fit/.jpg/_thn into one entry, ignore _sub/ and non-stack files."""
+
+    def _mk(self, d: Path, name: str):
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b"x")
+
+    def test_groups_fit_and_jpg_of_one_stack_and_ignores_subs(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            base = "Stacked_459_NGC 6946_20.0s_IRCUT_20260613-051001"
+            for suffix in (".fit", ".jpg", "_thn.jpg"):
+                self._mk(root / "NGC 6946", base + suffix)
+            # a raw sub + a stray Stacked in a _sub folder must be ignored
+            self._mk(root / "NGC 6946", "Light_NGC 6946_20.0s_IRCUT_20260613-051002.fit")
+            self._mk(root / "NGC 6946_sub", "Stacked_1_NGC 6946_20.0s_IRCUT_20260101-000000.fit")
+            stacks = inapp_inventory.find_inapp_stacks(root)
+            self.assertEqual(len(stacks), 1)
+            s = stacks[0]
+            self.assertEqual(s["subs"], 459)
+            self.assertEqual(s["target"], "NGC 6946")
+            self.assertEqual(s["datetime"], "20260613-051001")   # kept for tie-breaking
+            self.assertTrue(s["has_fit"])
+            self.assertTrue(s["has_jpg"])
+
+
+class BestPerTargetTests(unittest.TestCase):
+    """inapp_inventory.best_per_target — one entry per target: the stack with the
+    most subs, ties broken by the latest full timestamp (deterministic)."""
+
+    def test_keeps_highest_sub_count_per_target(self):
+        stacks = [
+            {"subs": 138, "target": "M 51", "datetime": "20260514-230000"},
+            {"subs": 399, "target": "M 51", "datetime": "20260516-010000"},
+            {"subs": 459, "target": "NGC 6946", "datetime": "20260613-051001"},
+        ]
+        best = {b["target"]: b for b in inapp_inventory.best_per_target(stacks)}
+        self.assertEqual(best["M 51"]["subs"], 399)
+        self.assertEqual(best["NGC 6946"]["subs"], 459)
+        self.assertEqual(len(best), 2)
+
+    def test_tie_break_prefers_latest_timestamp_same_day(self):
+        # same subs, same DATE, different time → must deterministically pick latest
+        stacks = [
+            {"subs": 100, "target": "M 1", "datetime": "20260509-013000"},
+            {"subs": 100, "target": "M 1", "datetime": "20260509-224500"},
+        ]
+        best = inapp_inventory.best_per_target(stacks)
+        self.assertEqual(len(best), 1)
+        self.assertEqual(best[0]["datetime"], "20260509-224500")
 
 
 if __name__ == "__main__":

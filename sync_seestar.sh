@@ -8,6 +8,7 @@
 #   Step 3b — normalise by mount mode: flat lights/ for a single mode,
 #             altaz/lights/ + eq/lights/ when both are present (Siril-ready)
 #   Step 4  — count subs + update AstroImages Inventory.md (vault + local copy)
+#   Step 4b — catalog the Seestar in-app Stacked_* previews → In-App Stacks Inventory
 #
 # Usage:
 #   ./sync_seestar.sh                         # full pipeline (paths from seestar.conf)
@@ -43,6 +44,7 @@ RENAME="$SCRIPT_DIR/rename_seestar_folders.py"
 ORGANIZE="$SCRIPT_DIR/organize_subs.py"
 SORT="$SCRIPT_DIR/sort_by_exptime.py"
 COUNT="$SCRIPT_DIR/count_subs.py"
+INAPP="$SCRIPT_DIR/inapp_inventory.py"
 CONF="$SCRIPT_DIR/seestar.conf"
 
 print_help() {
@@ -55,6 +57,7 @@ sync_seestar.sh — full Seestar sync pipeline
   Step 3b — normalise by mount mode (flat lights/ if one mode,
             altaz/lights/ + eq/lights/ if both) — Siril-ready
   Step 4  — count subs + update AstroImages Inventory.md
+  Step 4b — catalog in-app Stacked_* previews → In-App Stacks Inventory
 
 Usage:
   ./sync_seestar.sh                     # full pipeline (paths from seestar.conf)
@@ -301,6 +304,19 @@ if [[ -f "$COUNT" ]]; then
   python3 "$COUNT" "$DST" --update-inventory $STEP_FLAGS
 else
   echo "⚠️   count_subs.py not found at $COUNT — skipping count step"
+fi
+
+# ─────────────────────────────────────────────────────────
+# Step 4b: Catalog the Seestar in-app Stacked_* previews → In-App Stacks Inventory
+# ─────────────────────────────────────────────────────────
+if [[ $DRY_RUN -eq 0 && -f "$INAPP" ]]; then
+  echo ""
+  echo "══════════════════════════════════════════════════"
+  echo "  STEP 4b — In-app stack inventory"
+  echo "══════════════════════════════════════════════════"
+  # Writes Astrophotography/In-App Stacks Inventory.md to the vault
+  # (SEESTAR_VAULT_INV, exported above) + a copy at the archive root.
+  python3 "$INAPP" "$DST" --write
 fi
 
 echo ""
