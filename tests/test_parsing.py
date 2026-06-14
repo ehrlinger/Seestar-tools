@@ -384,5 +384,82 @@ class ResolveInventoryPathTests(unittest.TestCase):
                     os.environ["SEESTAR_VAULT_INV"] = old
 
 
+class MergeIntoExistingTests(unittest.TestCase):
+    """rename_seestar_folders.merge_into_existing — fold a space-named donor
+    folder into the already-canonical destination instead of skipping."""
+
+    def _mkfits(self, path: Path, name: str) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        f = path / name
+        f.write_bytes(b"fits")
+        return f
+
+    def test_moves_new_donor_root_fits_into_existing_dest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            # Existing canonical archive already has a sorted sub.
+            self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            # New incremental sync dropped a raw sub at the donor root.
+            self._mkfits(donor, "Light_0003.fit")
+
+            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+
+            self.assertTrue((dest / "Light_0003.fit").exists())
+            self.assertFalse(donor.exists())
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual(res["deduped"], 0)
+
+    def test_dedupes_filename_already_present_anywhere_in_dest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            already = self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            # Donor re-delivers a sub that already lives in the sorted tree.
+            self._mkfits(donor, "Light_0001.fit")
+
+            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+
+            self.assertEqual(res["moved"], 0)
+            self.assertEqual(res["deduped"], 1)
+            self.assertFalse(donor.exists())
+            # The already-sorted sub is untouched; no stray copy at dest root.
+            self.assertTrue(already.exists())
+            self.assertFalse((dest / "Light_0001.fit").exists())
+
+    def test_preserves_donor_subtree_structure(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            dest.mkdir()
+            self._mkfits(donor / "lights", "Light_0009.fit")
+
+            rename_seestar_folders.merge_into_existing(donor, dest, dry_run=False)
+
+            self.assertTrue((dest / "lights" / "Light_0009.fit").exists())
+            self.assertFalse(donor.exists())
+
+    def test_dry_run_makes_no_changes_but_reports_counts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            donor = root / "M 51_sub"
+            dest = root / "M_51_sub"
+            self._mkfits(dest / "20s" / "lights", "Light_0001.fit")
+            self._mkfits(donor, "Light_0003.fit")
+
+            res = rename_seestar_folders.merge_into_existing(donor, dest, dry_run=True)
+
+            # Nothing on disk changed...
+            self.assertTrue(donor.exists())
+            self.assertTrue((donor / "Light_0003.fit").exists())
+            self.assertFalse((dest / "Light_0003.fit").exists())
+            # ...but the report shows what WOULD happen.
+            self.assertEqual(res["moved"], 1)
+            self.assertEqual(res["deduped"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
