@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent that runs nas-wired-mount.sh at login and on every network change.
+
+  Before installing: replace YOUR_USERNAME below with your macOS short username,
+  copy this file (without the .example suffix) to
+      ~/Library/LaunchAgents/com.example.nas-wired-mount.plist
+  and load it with launchctl. See README.md.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.example.nas-wired-mount</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/YOUR_USERNAME/bin/nas-wired-mount.sh</string>
+    </array>
+
+    <!-- Run once when the agent loads (login) ... -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- ... and again every time the network configuration changes.
+         These paths are rewritten by macOS on link up/down, Wi-Fi <-> Ethernet
+         switches, DHCP changes, etc. -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/etc/resolv.conf</string>
+        <string>/Library/Preferences/SystemConfiguration/NetworkInterfaces.plist</string>
+    </array>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/nas-wired-mount.err.log</string>
+</dict>
+</plist>

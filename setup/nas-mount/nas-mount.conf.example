@@ -1,0 +1,16 @@
+# nas-mount.conf.example
+#
+# Copy this file to  nas-mount.conf  (in the same folder) and fill in your NAS
+# details. nas-mount.conf is gitignored, so your real values never get committed.
+#
+#   cp nas-mount.conf.example nas-mount.conf
+#   # then edit the three values below
+
+# NAS IP (a static IP avoids depending on mDNS / .local resolution)
+NAS_HOST="192.168.x.x"
+
+# SMB share name (mounts at /Volumes/<SHARE>)
+SHARE="your_share"
+
+# SMB username on the NAS
+SMB_USER="youruser"

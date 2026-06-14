@@ -21,3 +21,6 @@ __pycache__/
 *.seq
 pp_*.fit
 r_pp_*.fit
+
+# NAS auto-mount real config (personal network details)
+setup/nas-mount/nas-mount.conf
