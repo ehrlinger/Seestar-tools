@@ -89,10 +89,14 @@ def get_exptime(fits_path: Path) -> float | None:
 
 def collect_fits_files(sub_dir: Path) -> list[Path]:
     """
-    Return all FITS files in a _sub/_subs folder:
-      - First look in lights/ subdir (organised)
-      - Also include any loose FITS at the root (not yet moved)
-    Excludes processed/stacked files by name heuristic.
+    Return all raw FITS files in a _sub/_subs folder, across every layout:
+      - the flat lights/ subdir
+      - the lights/ of any immediate child dir — the mount-mode folders altaz/ and
+        eq/, or a legacy per-exposure 10s/ / 20s/ (darks/ and flats/ have no lights/
+        inside, so they're skipped naturally)
+      - any loose FITS at the root (not yet moved into lights/)
+    Excludes processed/stacked files by name heuristic (starless_, stacked
+    masters, etc.).
     """
     SKIP_PREFIXES = ("starless_", "starmask_", "stack_", "r_pp_", "result")
     SKIP_SUBSTRINGS = ("_processed.", "_GraXpert.", "_pp.")
@@ -108,23 +112,27 @@ def collect_fits_files(sub_dir: Path) -> list[Path]:
             return False
         return True
 
-    EXPTIME_DIR_RE = re.compile(r'^\d+(\.\d+)?s$')
+    def raw_fits_in(d: Path) -> list[Path]:
+        return [f for f in d.iterdir()
+                if f.is_file() and f.suffix in FITS_EXTENSIONS and is_raw(f)]
 
     files: list[Path] = []
 
-    # lights/ subdir (unsorted)
+    # Flat lights/ (single-mode target or not-yet-grouped).
     lights = sub_dir / "lights"
-    if lights.exists():
-        files += [f for f in lights.iterdir()
-                  if f.is_file() and f.suffix in FITS_EXTENSIONS and is_raw(f)]
+    if lights.is_dir():
+        files += raw_fits_in(lights)
 
-    # exposure-sorted subfolders: 10s/lights/, 20s/lights/, etc.
-    for exp_dir in sub_dir.iterdir():
-        if exp_dir.is_dir() and EXPTIME_DIR_RE.match(exp_dir.name):
-            sorted_lights = exp_dir / "lights"
-            if sorted_lights.exists():
-                files += [f for f in sorted_lights.iterdir()
-                          if f.is_file() and f.suffix in FITS_EXTENSIONS and is_raw(f)]
+    # Grouped subfolders, each holding their own lights/: the mount-mode folders
+    # altaz/ and eq/, or a legacy per-exposure 10s/ / 20s/ / 30s/. Keying on
+    # "any child dir that contains a lights/" covers every layout and naturally
+    # skips darks/ and flats/ (which have no lights/ inside).
+    for group_dir in sub_dir.iterdir():
+        if not group_dir.is_dir() or group_dir.name == "lights":
+            continue
+        grouped_lights = group_dir / "lights"
+        if grouped_lights.is_dir():
+            files += raw_fits_in(grouped_lights)
 
     # loose files at root
     files += [f for f in sub_dir.iterdir()
