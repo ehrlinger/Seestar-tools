@@ -112,3 +112,46 @@ def find_emmc_targets(emmc_root: Path) -> list[Path]:
                 and not is_in_excluded(p, emmc_root)):
             out.append(p)
     return out
+
+
+def eligible_subs(emmc_target: Path,
+                  index: dict[str, set[int]]) -> tuple[list[Path], list[Path]]:
+    """Split the target's root FITS subs into (to_delete, kept_unmatched).
+
+    A sub is deletable iff a file of the same name AND identical byte size is
+    present in *index* (built from the NAS target subtree). Only files directly
+    in the target root are considered — that is native Seestar layout. Returns
+    sorted lists; pure given the index (apart from reading each sub's size).
+    """
+    to_delete: list[Path] = []
+    kept: list[Path] = []
+    for p in sorted(emmc_target.iterdir()):
+        if not (p.is_file() and is_fits(p)):
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = -1
+        if size in index.get(p.name, set()):
+            to_delete.append(p)
+        else:
+            kept.append(p)
+    return to_delete, kept
+
+
+def sibling_jpgs(sub_path: Path) -> list[Path]:
+    """JPG preview + thumbnail belonging to a sub of stem S, in the same dir.
+
+    Matches S.jpg / S.jpeg (full preview) and S_thn.jpg / S_thn.jpeg (Seestar
+    thumbnail), case-insensitively, by exact stem so a preview is only ever
+    paired with the specific sub it belongs to. Returns existing files only.
+    """
+    stem = sub_path.stem            # "Light_a.fit" -> "Light_a"
+    wanted_stems = {stem, f"{stem}_thn"}
+    out = []
+    for p in sub_path.parent.iterdir():
+        if (p.is_file()
+                and p.suffix.lower() in JPG_SUFFIXES
+                and p.stem in wanted_stems):
+            out.append(p)
+    return sorted(out)

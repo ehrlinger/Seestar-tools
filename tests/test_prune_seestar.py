@@ -104,5 +104,90 @@ class PruneFindTargetsTests(unittest.TestCase):
         self.assertEqual(prune_seestar.find_emmc_targets(self.tmp), [])
 
 
+class PruneEligibleSubsTests(unittest.TestCase):
+    """eligible_subs splits root subs into (to_delete, kept_unmatched)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.target = self.tmp / "M 51_sub"
+        self.target.mkdir(parents=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _sub(self, name, size=10):
+        p = self.target / name
+        p.write_bytes(b"x" * size)
+        return p
+
+    def test_name_and_size_match_is_deletable(self):
+        self._sub("Light_a.fit", size=100)
+        index = {"Light_a.fit": {100}}
+        to_delete, kept = prune_seestar.eligible_subs(self.target, index)
+        self.assertEqual([p.name for p in to_delete], ["Light_a.fit"])
+        self.assertEqual(kept, [])
+
+    def test_size_mismatch_is_kept(self):
+        self._sub("Light_a.fit", size=100)
+        index = {"Light_a.fit": {999}}  # different size
+        to_delete, kept = prune_seestar.eligible_subs(self.target, index)
+        self.assertEqual(to_delete, [])
+        self.assertEqual([p.name for p in kept], ["Light_a.fit"])
+
+    def test_name_absent_is_kept(self):
+        self._sub("Light_b.fit", size=100)
+        to_delete, kept = prune_seestar.eligible_subs(self.target, {})
+        self.assertEqual(to_delete, [])
+        self.assertEqual([p.name for p in kept], ["Light_b.fit"])
+
+    def test_only_root_fits_considered_not_jpgs_or_noise(self):
+        self._sub("Light_a.fit", size=100)
+        self._sub("Light_a.jpg", size=100)        # preview, not a candidate
+        self._sub("._Light_a.fit", size=100)      # macOS noise
+        index = {"Light_a.fit": {100}, "Light_a.jpg": {100}}
+        to_delete, kept = prune_seestar.eligible_subs(self.target, index)
+        self.assertEqual([p.name for p in to_delete], ["Light_a.fit"])
+        self.assertEqual(kept, [])
+
+
+class PruneSiblingJpgsTests(unittest.TestCase):
+    """sibling_jpgs finds the preview + thumbnail for a given sub."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _touch(self, name):
+        p = self.tmp / name
+        p.write_bytes(b"x")
+        return p
+
+    def test_finds_preview_and_thumbnail(self):
+        sub = self._touch("Light_a.fit")
+        self._touch("Light_a.jpg")
+        self._touch("Light_a_thn.jpg")
+        got = sorted(p.name for p in prune_seestar.sibling_jpgs(sub))
+        self.assertEqual(got, ["Light_a.jpg", "Light_a_thn.jpg"])
+
+    def test_case_insensitive_suffix(self):
+        sub = self._touch("Light_b.fit")
+        self._touch("Light_b.JPG")
+        got = [p.name for p in prune_seestar.sibling_jpgs(sub)]
+        self.assertEqual(got, ["Light_b.JPG"])
+
+    def test_no_jpgs_returns_empty(self):
+        sub = self._touch("Light_c.fit")
+        self.assertEqual(prune_seestar.sibling_jpgs(sub), [])
+
+    def test_does_not_match_other_subs_jpg(self):
+        sub = self._touch("Light_a.fit")
+        self._touch("Light_aa.jpg")   # different stem
+        self.assertEqual(prune_seestar.sibling_jpgs(sub), [])
+
+
 if __name__ == "__main__":
     unittest.main()
