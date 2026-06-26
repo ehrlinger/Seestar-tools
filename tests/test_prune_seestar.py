@@ -317,5 +317,43 @@ class PruneOrchestratorTests(unittest.TestCase):
         self.assertEqual(summary["subs_deleted"], 1)
 
 
+class PruneMainDryRunPrecedenceTests(unittest.TestCase):
+    """main(): an explicit --dry-run wins over --execute (fail safe)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.emmc = self.root / "emmc"
+        self.nas = self.root / "nas"
+        (self.emmc / "M 51_sub").mkdir(parents=True)
+        (self.nas / "M_51_sub" / "lights").mkdir(parents=True)
+        (self.emmc / "M 51_sub" / "Light_a.fit").write_bytes(b"x" * 100)
+        (self.nas / "M_51_sub" / "lights" / "Light_a.fit").write_bytes(b"x" * 100)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _run_main(self, *flags):
+        argv = ["prune_seestar.py", "--emmc", str(self.emmc),
+                "--nas", str(self.nas), *flags]
+        old = sys.argv
+        sys.argv = argv
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                prune_seestar.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = old
+
+    def test_execute_with_dry_run_does_not_delete(self):
+        self._run_main("--execute", "--dry-run", "--yes")
+        self.assertTrue((self.emmc / "M 51_sub" / "Light_a.fit").exists())
+
+    def test_execute_alone_deletes(self):
+        self._run_main("--execute", "--yes")
+        self.assertFalse((self.emmc / "M 51_sub").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

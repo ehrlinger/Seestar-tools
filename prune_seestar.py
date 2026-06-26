@@ -305,12 +305,14 @@ def main() -> None:
     p.add_argument("--execute", action="store_true",
                    help="actually delete (default is dry-run)")
     p.add_argument("--dry-run", action="store_true",
-                   help="preview only (the default; explicit for clarity)")
+                   help="preview only (the default; wins over --execute)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="skip the confirmation prompt")
     args = p.parse_args()
 
-    dry_run = not args.execute        # dry-run unless --execute given
+    # Dry-run is the default. An explicit --dry-run always wins, so
+    # `--execute --dry-run` previews rather than deletes (fail safe).
+    dry_run = args.dry_run or not args.execute
 
     conf = load_conf()
     emmc = Path((args.emmc or conf["SEESTAR_EMMC"])).expanduser()
