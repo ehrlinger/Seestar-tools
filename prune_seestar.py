@@ -155,3 +155,61 @@ def sibling_jpgs(sub_path: Path) -> list[Path]:
                 and p.stem in wanted_stems):
             out.append(p)
     return sorted(out)
+
+
+def is_effectively_empty(directory: Path) -> bool:
+    """True if the dir holds no real files, ignoring only .DS_Store / ._* noise.
+
+    A kept sub or a stray/orphan JPG is a real file and makes this False, so
+    pruning never strands data.
+    """
+    for p in directory.rglob("*"):
+        if p.is_file() and not p.name.startswith(SKIP_PREFIXES):
+            return False
+    return True
+
+
+def prune_empty_dir(directory: Path, dry_run: bool) -> bool:
+    """Remove *directory* if it is effectively empty. Returns True if removed.
+
+    Clears .DS_Store / ._* noise first, then rmdir. Swallows the EBUSY /
+    ENOTEMPTY / EPERM / EACCES errors a network share raises when it still holds
+    a handle (macOS SMB leaves .smbdelete* tombstones) — mirrors
+    rename_seestar_folders._safe_rmtree_donor so a locked handle reports rather
+    than aborting the whole run. No-op in dry-run.
+    """
+    if not is_effectively_empty(directory):
+        return False
+    if dry_run:
+        return False
+
+    # Clear macOS noise so the directory can rmdir cleanly.
+    for p in list(directory.rglob("*")):
+        if p.is_file() and p.name.startswith(SKIP_PREFIXES):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    # Remove any now-empty noise subdirs, deepest first.
+    for p in sorted((d for d in directory.rglob("*") if d.is_dir()),
+                    key=lambda d: len(d.parts), reverse=True):
+        try:
+            p.rmdir()
+        except OSError:
+            pass
+
+    try:
+        directory.rmdir()
+    except OSError as e:
+        if e.errno in (errno.EBUSY, errno.ENOTEMPTY, errno.EPERM, errno.EACCES):
+            leftovers = list(directory.iterdir()) if directory.exists() else []
+            ghosts = [p for p in leftovers if p.name.startswith(".smbdelete")]
+            if leftovers and len(ghosts) == len(leftovers):
+                print(f"    ⚠️  {directory.name}: left {len(ghosts)} SMB "
+                      f"tombstone(s) (.smbdelete*) locked by the share. After a "
+                      f"NAS remount: rm -rf '{directory}'")
+            else:
+                print(f"    ⚠️  could not remove {directory.name}: {e}")
+            return False
+        raise
+    return True

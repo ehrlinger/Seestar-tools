@@ -189,5 +189,53 @@ class PruneSiblingJpgsTests(unittest.TestCase):
         self.assertEqual(prune_seestar.sibling_jpgs(sub), [])
 
 
+class PruneEmptyDirTests(unittest.TestCase):
+    """is_effectively_empty + prune_empty_dir handle noise and dry-run."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _dir(self, name):
+        d = self.tmp / name
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_empty_dir_is_effectively_empty(self):
+        d = self._dir("a")
+        self.assertTrue(prune_seestar.is_effectively_empty(d))
+
+    def test_only_noise_is_effectively_empty(self):
+        d = self._dir("b")
+        (d / ".DS_Store").write_bytes(b"x")
+        (d / "._ghost").write_bytes(b"x")
+        self.assertTrue(prune_seestar.is_effectively_empty(d))
+
+    def test_real_file_blocks_empty(self):
+        d = self._dir("c")
+        (d / "Light_kept.jpg").write_bytes(b"x")
+        self.assertFalse(prune_seestar.is_effectively_empty(d))
+
+    def test_prune_empty_dir_dry_run_keeps_dir(self):
+        d = self._dir("d")
+        self.assertFalse(prune_seestar.prune_empty_dir(d, dry_run=True))
+        self.assertTrue(d.exists())
+
+    def test_prune_empty_dir_executes(self):
+        d = self._dir("e")
+        (d / ".DS_Store").write_bytes(b"x")   # noise is cleared first
+        self.assertTrue(prune_seestar.prune_empty_dir(d, dry_run=False))
+        self.assertFalse(d.exists())
+
+    def test_prune_empty_dir_refuses_nonempty(self):
+        d = self._dir("f")
+        (d / "real.fit").write_bytes(b"x")
+        self.assertFalse(prune_seestar.prune_empty_dir(d, dry_run=False))
+        self.assertTrue(d.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
