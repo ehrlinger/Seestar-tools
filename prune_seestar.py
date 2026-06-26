@@ -278,3 +278,76 @@ def prune(emmc: Path, nas: Path, targets: list[str] | None,
             summary["dirs_pruned"] += 1
 
     return summary
+
+
+def _print_summary(summary: dict, dry_run: bool) -> None:
+    mb = summary["bytes_freed"] / (1024 * 1024)
+    print("\n" + "=" * 50)
+    head = "DRY RUN — would delete" if dry_run else "DONE — deleted"
+    print(f"  {head}: {summary['subs_deleted']} subs, "
+          f"{summary['jpgs_deleted']} jpgs ({mb:.1f} MB)")
+    print(f"  kept (not on NAS): {summary['subs_kept']} subs")
+    print(f"  targets skipped (no archive): {summary['targets_skipped']}")
+    print(f"  folders pruned: {summary['dirs_pruned']}")
+    print("=" * 50 + "\n")
+
+
+def main() -> None:
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(__doc__)
+        sys.exit(0)
+
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("targets", nargs="*",
+                   help="EMMC folder name(s) to limit to; default: all _sub dirs")
+    p.add_argument("--emmc", default=None, help="Seestar EMMC MyWorks root")
+    p.add_argument("--nas", default=None, help="NAS Seestar archive root")
+    p.add_argument("--execute", action="store_true",
+                   help="actually delete (default is dry-run)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="preview only (the default; explicit for clarity)")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="skip the confirmation prompt")
+    args = p.parse_args()
+
+    dry_run = not args.execute        # dry-run unless --execute given
+
+    conf = load_conf()
+    emmc = Path((args.emmc or conf["SEESTAR_EMMC"])).expanduser()
+    nas = Path((args.nas or conf["SEESTAR_NAS"])).expanduser()
+
+    if not emmc.exists():
+        print(f"❌  EMMC not found: {emmc}\n    Is the Seestar connected via USB?")
+        sys.exit(1)
+    if not nas.exists():
+        print(f"❌  NAS archive not found: {nas}\n    Is the NAS mounted?")
+        sys.exit(1)
+
+    print("=" * 50)
+    print("  prune_seestar — delete EMMC subs already on the NAS")
+    print("=" * 50)
+    print(f"  EMMC (delete from): {emmc}")
+    print(f"  NAS  (verify on):   {nas}")
+    if args.targets:
+        print(f"  targets: {', '.join(args.targets)}")
+    if dry_run:
+        print("\n  DRY RUN — nothing will be deleted (pass --execute to delete)")
+    print()
+
+    if not dry_run and not args.yes:
+        if not sys.stdin.isatty():
+            print("❌  Refusing to delete unattended without confirmation.")
+            print("    Re-run with --yes once you've checked the paths above,")
+            print("    or omit --execute to preview.")
+            sys.exit(1)
+        reply = input("  Delete matched subs from the EMMC above? [y/N] ")
+        if reply.strip().lower() not in ("y", "yes"):
+            print("  Aborted — nothing was deleted.")
+            sys.exit(0)
+
+    summary = prune(emmc, nas, args.targets or None, dry_run)
+    _print_summary(summary, dry_run)
+
+
+if __name__ == "__main__":
+    main()
