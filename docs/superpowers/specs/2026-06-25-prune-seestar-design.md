@@ -6,10 +6,11 @@
 ## Purpose
 
 Free space on the Seestar S50 EMMC by deleting FITS subs that are safely
-archived on the NAS. This is the inverse-safety companion to `sync_seestar.sh`:
-it deletes *from* the device, so it errs hard toward caution. A sub is removed
-only when an identical copy (name **and** byte size) is confirmed under its
-archived target folder on the NAS.
+archived on the NAS, along with each deleted sub's per-sub JPG preview. This is
+the inverse-safety companion to `sync_seestar.sh`: it deletes *from* the device,
+so it errs hard toward caution. A sub is removed only when an identical copy
+(name **and** byte size) is confirmed under its archived target folder on the
+NAS. A JPG preview is removed only when its sibling `.fit` sub is removed.
 
 ## Why name+size matching (not same-path)
 
@@ -66,14 +67,33 @@ Notes:
   reusing the `is_fits` helper convention from `restore_to_seestar.py`.
 - Only subs at the **EMMC folder root** are candidates — that is native Seestar
   layout. (The EMMC is never reorganized by these tools.)
-- Per-sub JPG previews are out of scope and never touched.
+
+## Per-sub JPG previews (ride along with their data)
+
+Per-sub JPGs are *never* on the NAS — the sync explicitly excludes
+`*_sub/**.jpg`. They therefore cannot be matched against the NAS the way FITS
+are. Instead, a JPG is deleted **only when its sibling `.fit` sub is deleted**
+(i.e. that sub was confirmed on the NAS). Previews thus leave the device exactly
+as their data does; a sub still waiting to sync keeps its preview.
+
+For each deleted sub with stem `S` (filename minus the FITS suffix), delete,
+within the same target folder:
+
+- `S.jpg` / `S.jpeg` (case-insensitive) — the full-size preview, and
+- `S_thn.jpg` / `S_thn.jpeg` — the Seestar thumbnail, if present.
+
+Match by stem so a preview is only ever removed alongside the specific sub it
+belongs to. JPGs whose `.fit` was kept (not on NAS, or size mismatch) are left
+untouched. `.DS_Store` / `._*` are never JPG candidates.
 
 ## Deletion and empty-dir pruning
 
-- In dry-run, print what *would* be deleted; touch nothing.
-- In `--execute`, `unlink()` each eligible sub.
-- After processing a target, if it holds **no FITS** (ignoring `.DS_Store` /
-  `._*` noise), remove the folder. Reuse the swallow-`EBUSY`/`ENOTEMPTY`/
+- In dry-run, print what *would* be deleted (subs and their JPGs); touch nothing.
+- In `--execute`, `unlink()` each eligible sub and its matched JPG previews.
+- After processing a target, if it holds **no real files at all** — ignoring
+  only `.DS_Store` / `._*` macOS noise — remove the folder. A kept sub, or a
+  stray/orphan JPG, leaves a real file behind and blocks pruning. Reuse the
+  swallow-`EBUSY`/`ENOTEMPTY`/
   `EPERM`/`EACCES` pattern from `rename_seestar_folders._safe_rmtree_donor`
   (with the `.smbdelete*` tombstone report) so a locked NAS/SMB handle reports
   rather than aborting the run.
@@ -82,7 +102,8 @@ Notes:
 
 Per target:
 - canonical NAS name and whether it was found / skipped,
-- count deleted (or would-delete), count kept-unmatched, bytes freed,
+- count deleted (or would-delete) subs and JPG previews, count kept-unmatched,
+  bytes freed (subs + JPGs combined),
 - an explicit list of subs present on the EMMC but **not** confirmed on the NAS
   (these are never deleted — they flag what still needs a sync).
 
@@ -101,7 +122,10 @@ Pure-function core for testability:
   excluding `_trash`/`scripts`.
 - `eligible_subs(emmc_target, index) -> tuple[list[Path], list[Path]]` —
   returns `(to_delete, kept_unmatched)`. Pure given the index.
-- `is_effectively_empty(dir) -> bool` — no FITS ignoring noise files.
+- `sibling_jpgs(sub_path) -> list[Path]` — `S.jpg`/`S.jpeg`/`S_thn.jpg`/
+  `S_thn.jpeg` that exist for a sub of stem `S`. Pure given the filesystem.
+- `is_effectively_empty(dir) -> bool` — no real files, ignoring only
+  `.DS_Store` / `._*`.
 - `prune(...)` — orchestration, dry-run aware.
 - `main()` — arg parsing, conf, confirmation prompt.
 
@@ -118,12 +142,16 @@ Add `tests/` coverage in the repo's pytest style (tmp_path fixtures):
 - missing NAS target folder → whole target skipped, nothing deleted.
 - reorg case: sub at EMMC root, copy under NAS `<exp>s/lights/` → matched.
 - dry-run (default) deletes nothing even when matches exist.
-- empty-dir pruning removes a folder once its FITS are gone.
+- deleting a matched sub also deletes its `S.jpg` and `S_thn.jpg` siblings.
+- a kept (unmatched) sub keeps its JPG preview.
+- a folder with a leftover/orphan JPG is NOT pruned (real file remains).
+- empty-dir pruning removes a folder once all real files are gone.
 - a folder containing only `.DS_Store`/`._*` is treated as empty.
 - `_trash`/`scripts` targets are excluded.
 
 ## Out of scope (YAGNI)
 
 - Content-hash verification (name+size chosen as the safety/speed balance).
-- Deleting per-sub JPGs or whole-folder blow-away.
+- Deleting unmatched JPGs (a JPG only goes when its sub does) or whole-folder
+  blow-away.
 - Touching the NAS side in any way (read-only there).
