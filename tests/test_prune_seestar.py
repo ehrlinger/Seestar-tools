@@ -237,5 +237,85 @@ class PruneEmptyDirTests(unittest.TestCase):
         self.assertTrue(d.exists())
 
 
+class PruneOrchestratorTests(unittest.TestCase):
+    """prune() ties matching, JPG ride-along, and dir pruning together."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.emmc = self.root / "emmc"
+        self.nas = self.root / "nas"
+        self.emmc.mkdir()
+        self.nas.mkdir()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def _f(self, base, rel, size=10):
+        p = base / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * size)
+        return p
+
+    def _quiet(self, **kw):
+        # prune() prints a report; silence it for assertions.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            return prune_seestar.prune(**kw)
+
+    def test_matched_sub_and_jpgs_deleted_folder_pruned(self):
+        # EMMC: native layout "M 51_sub" with one sub + its previews
+        self._f(self.emmc, "M 51_sub/Light_a.fit", size=100)
+        self._f(self.emmc, "M 51_sub/Light_a.jpg", size=50)
+        self._f(self.emmc, "M 51_sub/Light_a_thn.jpg", size=5)
+        # NAS: archived + reorged under the renamed folder
+        self._f(self.nas, "M_51_sub/20s/lights/Light_a.fit", size=100)
+
+        summary = self._quiet(emmc=self.emmc, nas=self.nas,
+                              targets=None, dry_run=False)
+        self.assertFalse((self.emmc / "M 51_sub").exists())   # pruned
+        self.assertEqual(summary["subs_deleted"], 1)
+        self.assertEqual(summary["jpgs_deleted"], 2)
+        self.assertEqual(summary["targets_skipped"], 0)
+
+    def test_dry_run_deletes_nothing(self):
+        self._f(self.emmc, "M 51_sub/Light_a.fit", size=100)
+        self._f(self.nas, "M_51_sub/lights/Light_a.fit", size=100)
+        summary = self._quiet(emmc=self.emmc, nas=self.nas,
+                              targets=None, dry_run=True)
+        self.assertTrue((self.emmc / "M 51_sub/Light_a.fit").exists())
+        self.assertEqual(summary["subs_deleted"], 1)  # counts "would delete"
+
+    def test_missing_nas_target_is_skipped(self):
+        self._f(self.emmc, "M 51_sub/Light_a.fit", size=100)
+        # no M_51_sub on the NAS at all
+        summary = self._quiet(emmc=self.emmc, nas=self.nas,
+                              targets=None, dry_run=False)
+        self.assertTrue((self.emmc / "M 51_sub/Light_a.fit").exists())
+        self.assertEqual(summary["subs_deleted"], 0)
+        self.assertEqual(summary["targets_skipped"], 1)
+
+    def test_unmatched_sub_kept_with_its_jpg(self):
+        self._f(self.emmc, "M 51_sub/Light_a.fit", size=100)
+        self._f(self.emmc, "M 51_sub/Light_a.jpg", size=50)
+        self._f(self.nas, "M_51_sub/lights/Light_a.fit", size=999)  # size differs
+        summary = self._quiet(emmc=self.emmc, nas=self.nas,
+                              targets=None, dry_run=False)
+        self.assertTrue((self.emmc / "M 51_sub/Light_a.fit").exists())
+        self.assertTrue((self.emmc / "M 51_sub/Light_a.jpg").exists())
+        self.assertEqual(summary["subs_kept"], 1)
+
+    def test_targets_filter_limits_scope(self):
+        self._f(self.emmc, "M 51_sub/Light_a.fit", size=100)
+        self._f(self.emmc, "NGC 7000_sub/Light_b.fit", size=100)
+        self._f(self.nas, "M_51_sub/lights/Light_a.fit", size=100)
+        self._f(self.nas, "NGC_7000_sub/lights/Light_b.fit", size=100)
+        summary = self._quiet(emmc=self.emmc, nas=self.nas,
+                              targets=["M 51_sub"], dry_run=False)
+        self.assertFalse((self.emmc / "M 51_sub").exists())
+        self.assertTrue((self.emmc / "NGC 7000_sub/Light_b.fit").exists())
+        self.assertEqual(summary["subs_deleted"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -213,3 +213,68 @@ def prune_empty_dir(directory: Path, dry_run: bool) -> bool:
             return False
         raise
     return True
+
+
+def prune(emmc: Path, nas: Path, targets: list[str] | None,
+          dry_run: bool) -> dict:
+    """Delete EMMC subs (and their JPG previews) confirmed on the NAS.
+
+    For each EMMC target: map its name to the NAS via new_name(); if that NAS
+    folder is missing, skip the whole target. Otherwise index the NAS subtree
+    and delete each root sub whose name+size matches, plus that sub's sibling
+    JPG preview/thumbnail. Prune a target folder once it holds no real files.
+
+    Returns a summary dict with totals. Counts reflect what was (or, in dry-run,
+    *would be*) deleted.
+    """
+    summary = {
+        "subs_deleted": 0, "jpgs_deleted": 0, "subs_kept": 0,
+        "bytes_freed": 0, "targets_skipped": 0, "dirs_pruned": 0,
+    }
+
+    emmc_targets = find_emmc_targets(emmc)
+    if targets:
+        wanted = set(targets)
+        emmc_targets = [t for t in emmc_targets if t.name in wanted]
+
+    verb = "WOULD DELETE" if dry_run else "DELETE"
+    for target in emmc_targets:
+        canonical = new_name(target.name)
+        nas_target = nas / canonical
+        print(f"\n── {target.name}  →  NAS/{canonical}")
+
+        if not nas_target.is_dir():
+            print(f"   ⏭  SKIP — not on NAS (no {canonical}/); nothing deletable.")
+            summary["targets_skipped"] += 1
+            continue
+
+        index = index_nas_target(nas_target)
+        to_delete, kept = eligible_subs(target, index)
+
+        for sub in to_delete:
+            jpgs = sibling_jpgs(sub)
+            for f in [sub, *jpgs]:
+                try:
+                    summary["bytes_freed"] += f.stat().st_size
+                except OSError:
+                    pass
+            print(f"   🗑  {verb}  {sub.name}"
+                  + (f"  (+{len(jpgs)} jpg)" if jpgs else ""))
+            if not dry_run:
+                for f in [sub, *jpgs]:
+                    try:
+                        f.unlink()
+                    except OSError as e:
+                        print(f"      ⚠️  could not delete {f.name}: {e}")
+            summary["subs_deleted"] += 1
+            summary["jpgs_deleted"] += len(jpgs)
+
+        for sub in kept:
+            print(f"   ⏸  KEEP  {sub.name} — not confirmed on NAS")
+        summary["subs_kept"] += len(kept)
+
+        if prune_empty_dir(target, dry_run):
+            print(f"   📁  pruned empty folder {target.name}")
+            summary["dirs_pruned"] += 1
+
+    return summary
