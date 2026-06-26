@@ -17,6 +17,7 @@ The pipeline runs in three phases: **ingest** (sync from the scope to the NAS, s
 | `batch_stack.py` | Batch-runs Siril's `Seestar_Preprocessing` script across all pending folders |
 | `sort_by_exptime.py` | Sorts subs into per-exposure folders (`10s/`, `20s/`) by reading FITS `EXPTIME` |
 | `purge_siril_cruft.py` | Reclaims archive space: deletes Siril `process/` dirs, `Copy #N of …` duplicates, and double-`starless_` files, then hands `lights/` to `sort_by_exptime.py`. Dry-run by default |
+| `prune_seestar.py` | Deletes EMMC subs already on the NAS (name+size match) plus their per-sub JPG previews; prunes emptied folders. Dry-run by default — pass `--execute` |
 
 ## Setup
 
