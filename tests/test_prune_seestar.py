@@ -34,5 +34,75 @@ class PruneImportTests(unittest.TestCase):
         self.assertIs(prune_seestar.new_name, rename_seestar_folders.new_name)
 
 
+class PruneIndexTests(unittest.TestCase):
+    """is_fits + index_nas_target build the name->sizes match index."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _touch(self, rel, size=10):
+        p = self.tmp / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * size)
+        return p
+
+    def test_is_fits_true_for_fit_and_fits(self):
+        self.assertTrue(prune_seestar.is_fits(Path("Light_M51.fit")))
+        self.assertTrue(prune_seestar.is_fits(Path("Light_M51.FITS")))
+
+    def test_is_fits_false_for_jpg_and_noise(self):
+        self.assertFalse(prune_seestar.is_fits(Path("Light_M51.jpg")))
+        self.assertFalse(prune_seestar.is_fits(Path("._Light_M51.fit")))
+
+    def test_index_collapses_reorg_subtree(self):
+        self._touch("M_51_sub/20s/lights/Light_a.fit", size=100)
+        self._touch("M_51_sub/lights/Light_b.fit", size=200)
+        self._touch("M_51_sub/Stacked_master.jpg", size=999)  # not FITS
+        idx = prune_seestar.index_nas_target(self.tmp / "M_51_sub")
+        self.assertEqual(idx, {"Light_a.fit": {100}, "Light_b.fit": {200}})
+
+    def test_index_records_multiple_sizes_for_same_name(self):
+        self._touch("T_sub/lights/Light_a.fit", size=100)
+        self._touch("T_sub/20s/lights/Light_a.fit", size=101)
+        idx = prune_seestar.index_nas_target(self.tmp / "T_sub")
+        self.assertEqual(idx, {"Light_a.fit": {100, 101}})
+
+
+class PruneFindTargetsTests(unittest.TestCase):
+    """find_emmc_targets returns top-level _sub/_subs dirs, minus excluded."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mkdir(self, rel):
+        d = self.tmp / rel
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_returns_sub_and_subs_dirs(self):
+        self._mkdir("M 51_sub")
+        self._mkdir("NGC 7000_subs")
+        names = sorted(p.name for p in prune_seestar.find_emmc_targets(self.tmp))
+        self.assertEqual(names, ["M 51_sub", "NGC 7000_subs"])
+
+    def test_ignores_non_sub_dirs_and_files(self):
+        self._mkdir("random_folder")
+        (self.tmp / "loose.fit").write_bytes(b"x")
+        self.assertEqual(prune_seestar.find_emmc_targets(self.tmp), [])
+
+    def test_excludes_trash_and_scripts(self):
+        self._mkdir("_trash/M 51_sub")
+        self._mkdir("scripts/Foo_sub")
+        self.assertEqual(prune_seestar.find_emmc_targets(self.tmp), [])
+
+
 if __name__ == "__main__":
     unittest.main()

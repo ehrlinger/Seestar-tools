@@ -74,3 +74,41 @@ def load_conf() -> dict:
             key, _, val = line.partition("=")
             conf[key.strip()] = val.strip().strip('"').strip("'")
     return conf
+
+
+def is_fits(path: Path) -> bool:
+    """True for a .fit/.fits file that is not macOS resource-fork noise."""
+    return (path.suffix.lower() in FITS_SUFFIXES
+            and not path.name.startswith(SKIP_PREFIXES))
+
+
+def index_nas_target(nas_target_dir: Path) -> dict[str, set[int]]:
+    """Map FITS basename -> set of byte sizes seen anywhere under the target.
+
+    Collapses the archive's lights/ and <exp>s/lights/ reorg so an EMMC sub at
+    the folder root can be matched wherever its NAS copy was filed. Same key as
+    rename_seestar_folders.merge_into_existing's dedupe.
+    """
+    index: dict[str, set[int]] = {}
+    for p in nas_target_dir.rglob("*"):
+        if p.is_file() and is_fits(p):
+            try:
+                index.setdefault(p.name, set()).add(p.stat().st_size)
+            except OSError:
+                continue
+    return index
+
+
+def find_emmc_targets(emmc_root: Path) -> list[Path]:
+    """Top-level _sub/_subs folders on the EMMC, excluding _trash/scripts.
+
+    The EMMC holds targets in native layout directly under MyWorks, so only the
+    immediate children are scanned (the device is never reorganized).
+    """
+    out = []
+    for p in sorted(emmc_root.iterdir()):
+        if (p.is_dir()
+                and (p.name.endswith("_sub") or p.name.endswith("_subs"))
+                and not is_in_excluded(p, emmc_root)):
+            out.append(p)
+    return out
